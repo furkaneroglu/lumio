@@ -158,11 +158,11 @@ class ViewSonicOmniApp:
         self.settings_window.show()
 
     def _on_hotkey_triggered(self, action_name: str, new_val: int, hud_type: str = "brightness", is_muted: bool = False):
-        desc = self.worker.active_device.description if self.worker.active_device else "ViewSonic OMNI"
+        desc = self.worker.active_monitor_name
         self.root.after(0, lambda: self.osd.show(desc, new_val, action_name, hud_type, is_muted))
 
     def _refresh_all_ui(self):
-        desc = self.worker.active_device.description if self.worker.active_device else "ViewSonic OMNI"
+        desc = self.worker.active_monitor_name
         b = self.worker.get_current_brightness()
         c = self.worker.get_current_contrast()
         v = self.worker.get_current_volume()

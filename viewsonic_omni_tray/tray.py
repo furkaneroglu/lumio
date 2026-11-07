@@ -100,13 +100,13 @@ class TrayApp:
         if self.icon is None:
             return
 
-        desc = self.worker.active_device.description if self.worker.active_device else "Monitör"
+        desc = self.worker.active_monitor_name
         status_str = status.value
         vol = self.worker.get_current_volume()
         cnt = self.worker.get_current_contrast()
         mode = self.worker.get_current_mode()
         inp_name = INPUT_SOURCES.get(self.worker.get_current_input(), "HDMI")
-        title_text = f"ViewSonic OMNI ({desc})\nMod: {mode} | P: %{brightness} | K: %{cnt} | S: %{vol} | Giriş: {inp_name} [{status_str}]"
+        title_text = f"Ekran Kontrol ({desc})\nMod: {mode} | P: %{brightness} | K: %{cnt} | S: %{vol} | Giriş: {inp_name} [{status_str}]"
 
         try:
             self.icon.title = title_text
@@ -124,7 +124,7 @@ class TrayApp:
         cur_i = self.worker.get_current_input()
         cur_m = self.worker.get_current_mode()
         status = self.worker.status
-        desc = self.worker.active_device.description if self.worker.active_device else "Algılanamadı"
+        desc = self.worker.active_monitor_name
 
         if status == MonitorStatus.CONNECTED:
             status_tag = f"🟢 {desc} ({cur_m} | P:%{cur_b} | K:%{cur_c} | S:%{cur_v})"
@@ -132,6 +132,9 @@ class TrayApp:
             status_tag = f"🟡 {desc} (Uykuda)"
         else:
             status_tag = f"🔴 {desc} (Bağlantı Yok)"
+
+        def make_monitor_select_action(idx: int):
+            return lambda icon, item: self.worker.select_device(idx)
 
         def make_brightness_action(val: int):
             return lambda icon, item: self.worker.set_brightness(val)
@@ -150,6 +153,23 @@ class TrayApp:
 
         def make_profile_action(prof_name: str):
             return lambda icon, item: self.worker.apply_profile(prof_name)
+
+        # 0. Aktif Ekran Seçimi Menüsü
+        monitor_select_items = []
+        for dev in self.worker.devices:
+            is_active = (self.worker.active_index == dev.index)
+            prefix = "● " if is_active else "  "
+            label = f"{prefix}🖥️ {dev.description}"
+            monitor_select_items.append(pystray.MenuItem(label, make_monitor_select_action(dev.index)))
+
+        if len(self.worker.devices) > 1:
+            is_sync_active = (self.worker.active_index == -1)
+            prefix = "● " if is_sync_active else "  "
+            monitor_select_items.append(pystray.Menu.SEPARATOR)
+            monitor_select_items.append(pystray.MenuItem(f"{prefix}🔗 Tüm Ekranlar (Senkron)", make_monitor_select_action(-1)))
+
+        monitor_select_items.append(pystray.Menu.SEPARATOR)
+        monitor_select_items.append(pystray.MenuItem("🔄 Ekranları Yeniden Tara", lambda icon, item: self._on_rescan_clicked()))
 
         # 1. Ekran Modları (ViewMode)
         mode_items = []
@@ -214,6 +234,10 @@ class TrayApp:
 
             # Hızlı Açılır Panel
             pystray.MenuItem("🎛️  Kontrol Panelini Aç", lambda icon, item: self.on_open_popup(), default=True),
+            pystray.Menu.SEPARATOR,
+
+            # Aktif Ekran Seçimi (Çoklu Monitör)
+            pystray.MenuItem("🖥️ Aktif Ekran Seçimi", pystray.Menu(*monitor_select_items)),
             pystray.Menu.SEPARATOR,
 
             # Ekran Modları (ViewMode)

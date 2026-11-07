@@ -101,7 +101,11 @@ class HotkeyService:
             if hotkeys.get("cycle_input"):
                 hotkey_mapping[hotkeys["cycle_input"]] = lambda: self._on_cycle_input()
 
-            # 7. Monitörü Uyku Moduna Al
+            # 7. Aktif Ekran / Senkron Geçişi (Cycle Monitor)
+            if hotkeys.get("cycle_monitor"):
+                hotkey_mapping[hotkeys["cycle_monitor"]] = lambda: self._on_cycle_monitor()
+
+            # 8. Monitörü Uyku Moduna Al
             if hotkeys.get("sleep_monitor"):
                 hotkey_mapping[hotkeys["sleep_monitor"]] = lambda: self._on_sleep_monitor()
 
@@ -174,6 +178,11 @@ class HotkeyService:
         name = INPUT_SOURCES.get(inp, "DisplayPort / HDMI")
         if self.on_hotkey_triggered:
             self.on_hotkey_triggered(name, 100, "input", False)
+
+    def _on_cycle_monitor(self):
+        active_name = self.worker.cycle_active_monitor()
+        if self.on_hotkey_triggered:
+            self.on_hotkey_triggered(active_name, 100, "monitor", False)
 
     def _on_sleep_monitor(self):
         self.worker.sleep_monitor()

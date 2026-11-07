@@ -226,5 +226,103 @@ class TestDisplayModes(unittest.TestCase):
         self.assertEqual(worker.get_current_contrast(), 75)
 
 
+class TestMultiMonitorAndSync(unittest.TestCase):
+    """Çoklu Monitör (ViewSonic + Rampage) ve Senkron Mod Testleri"""
+
+    def test_monitor_device_brand_and_properties(self):
+        dev_vs = MonitorDevice(
+            index=0,
+            hmonitor=1001,
+            description="ViewSonic VX2718-2KPC",
+            current_brightness=60,
+            brand="ViewSonic",
+            model="VX2718-2KPC"
+        )
+        self.assertTrue(dev_vs.is_viewsonic)
+        self.assertFalse(dev_vs.is_rampage)
+        self.assertEqual(dev_vs.short_name, "ViewSonic")
+
+        dev_rp = MonitorDevice(
+            index=1,
+            hmonitor=1002,
+            description="Rampage GL27R200Q",
+            current_brightness=100,
+            brand="Rampage",
+            model="GL27R200Q"
+        )
+        self.assertFalse(dev_rp.is_viewsonic)
+        self.assertTrue(dev_rp.is_rampage)
+        self.assertEqual(dev_rp.short_name, "Rampage")
+
+    def test_select_device_and_cycle(self):
+        cfg = ConfigManager()
+        worker = AsyncWriteQueueWorker(cfg)
+        dev0 = MonitorDevice(0, 1001, "ViewSonic VX2718-2KPC", 60, brand="ViewSonic", model="VX2718")
+        dev1 = MonitorDevice(1, 1002, "Rampage GL27R200Q", 100, brand="Rampage", model="GL27R200Q")
+        worker.devices = [dev0, dev1]
+        worker.active_device = dev0
+        worker.active_index = 0
+
+        # Rampage seç
+        worker.select_device(1)
+        self.assertEqual(worker.active_index, 1)
+        self.assertEqual(worker.active_device.description, "Rampage GL27R200Q")
+        self.assertEqual(worker.active_monitor_name, "Rampage GL27R200Q")
+
+        # Senkron Mod seç (-1)
+        worker.select_device(-1)
+        self.assertEqual(worker.active_index, -1)
+        self.assertIsNone(worker.active_device)
+        self.assertEqual(worker.active_monitor_name, "Tüm Ekranlar (Senkron)")
+
+        # Döngü: -1 -> 0
+        n0 = worker.cycle_active_monitor()
+        self.assertEqual(worker.active_index, 0)
+        self.assertEqual(n0, "ViewSonic VX2718-2KPC")
+
+        # Döngü: 0 -> 1
+        n1 = worker.cycle_active_monitor()
+        self.assertEqual(worker.active_index, 1)
+        self.assertEqual(n1, "Rampage GL27R200Q")
+
+        # Döngü: 1 -> -1 (Senkron)
+        n_sync = worker.cycle_active_monitor()
+        self.assertEqual(worker.active_index, -1)
+        self.assertEqual(n_sync, "Tüm Ekranlar (Senkron)")
+
+    def test_sync_hardware_write(self):
+        cfg = ConfigManager()
+        worker = AsyncWriteQueueWorker(cfg)
+        worker.debounce_sec = 0.01
+        worker.throttle_sec = 0.01
+
+        dev0 = MonitorDevice(0, 1001, "ViewSonic VX2718-2KPC", 50)
+        dev1 = MonitorDevice(1, 1002, "Rampage GL27R200Q", 50)
+        worker.devices = [dev0, dev1]
+        worker.select_device(-1)
+
+        written_targets = []
+        def mock_set_b(idx, val):
+            written_targets.append((idx, val))
+            return val
+
+        worker.manager.set_brightness = MagicMock(side_effect=mock_set_b)
+        worker._worker_thread.start()
+
+        try:
+            worker.set_brightness(75, immediate_ui=False)
+            time.sleep(0.15)
+
+            # Her iki monitöre de yazılmış olmalı!
+            indices = [item[0] for item in written_targets]
+            self.assertIn(0, indices)
+            self.assertIn(1, indices)
+            self.assertEqual(worker.get_current_brightness(), 75)
+            self.assertEqual(dev0.current_brightness, 75)
+            self.assertEqual(dev1.current_brightness, 75)
+        finally:
+            worker.stop()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -38,6 +38,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "volume_down": "<ctrl>+<alt>+<page_down>",
         "volume_mute": "<ctrl>+<alt>+m",
         "cycle_input": "<ctrl>+<alt>+i",
+        "cycle_monitor": "<ctrl>+<alt>+s",
         "sleep_monitor": "<ctrl>+<alt>+p"
     },
     "hardware": {

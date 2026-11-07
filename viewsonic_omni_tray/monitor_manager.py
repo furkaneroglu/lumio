@@ -98,6 +98,24 @@ DISPLAY_MODES = {
     }
 }
 
+# Bilinen Monitör Üretici Kodları (EDID PNP ID)
+KNOWN_BRANDS = {
+    "LHC": "Rampage",
+    "VSC": "ViewSonic",
+    "DEL": "Dell",
+    "SAM": "Samsung",
+    "SEC": "Samsung",
+    "GSM": "LG",
+    "AOC": "AOC",
+    "ACR": "Acer",
+    "ASU": "ASUS",
+    "BEN": "BenQ",
+    "MSI": "MSI",
+    "HPN": "HP",
+    "HWP": "HP",
+    "LEN": "Lenovo",
+}
+
 class DDCCIError(Exception):
     """DDC/CI genel donanım hatası."""
     def __init__(self, message: str, code: Optional[int] = None):
@@ -120,6 +138,27 @@ class PHYSICAL_MONITOR(ctypes.Structure):
     ]
 
 
+class MONITORINFOEXW(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("rcMonitor", wintypes.RECT),
+        ("rcWork", wintypes.RECT),
+        ("dwFlags", wintypes.DWORD),
+        ("szDevice", wintypes.WCHAR * 32)
+    ]
+
+
+class DISPLAY_DEVICEW(ctypes.Structure):
+    _fields_ = [
+        ("cb", wintypes.DWORD),
+        ("DeviceName", wintypes.WCHAR * 32),
+        ("DeviceString", wintypes.WCHAR * 128),
+        ("StateFlags", wintypes.DWORD),
+        ("DeviceID", wintypes.WCHAR * 128),
+        ("DeviceKey", wintypes.WCHAR * 128)
+    ]
+
+
 class MonitorDevice:
     """Tek bir fiziksel monitörün özelliklerini ve durumunu temsil eden veri modeli."""
     def __init__(
@@ -135,11 +174,15 @@ class MonitorDevice:
         current_contrast: int = 70,
         current_color_preset: int = 0x05,
         current_mode: str = "Standart",
-        capabilities_string: str = ""
+        capabilities_string: str = "",
+        brand: str = "",
+        model: str = ""
     ):
         self.index = index
         self.hmonitor = hmonitor
         self.description = description
+        self.brand = brand
+        self.model = model
         self.current_brightness = current_brightness
         self.min_brightness = min_brightness
         self.max_brightness = max_brightness
@@ -149,8 +192,28 @@ class MonitorDevice:
         self.current_color_preset = current_color_preset
         self.current_mode = current_mode
         self.capabilities_string = capabilities_string
-        desc_lower = description.lower()
-        self.is_viewsonic = "viewsonic" in desc_lower or "vx2718" in desc_lower or "omni" in desc_lower
+
+    @property
+    def short_name(self) -> str:
+        if self.brand:
+            return self.brand
+        if self.description:
+            first_word = self.description.split()[0]
+            if first_word.lower() not in ("generic", "monitör", "monitor"):
+                return first_word
+        return f"Ekran {self.index + 1}"
+
+    @property
+    def is_viewsonic(self) -> bool:
+        desc_lower = self.description.lower()
+        brand_lower = (self.brand or "").lower()
+        return "viewsonic" in desc_lower or "vx2718" in desc_lower or "omni" in desc_lower or "vsc" in brand_lower or "viewsonic" in brand_lower
+
+    @property
+    def is_rampage(self) -> bool:
+        desc_lower = self.description.lower()
+        brand_lower = (self.brand or "").lower()
+        return "rampage" in desc_lower or "gl27" in desc_lower or "lhc" in brand_lower or "rampage" in brand_lower
 
     @property
     def input_name(self) -> str:
@@ -324,6 +387,82 @@ class MonitorManager:
 
             raise DDCCIDisconnectedError(f"Monitör #{target_index} bulunamadı.")
 
+    def _resolve_friendly_name(self, hmon: wintypes.HMONITOR, raw_desc: str, global_idx: int) -> Tuple[str, str, str]:
+        """
+        Windows Display Devices ve Registry EDID verilerini tarayarak
+        monitörün gerçek üretici (brand) ve model (model) adını çözer.
+        Örn: 'Generic PnP Monitor' -> ('Rampage GL27R200Q', 'Rampage', 'GL27R200Q')
+        """
+        brand = ""
+        model = ""
+        friendly_name = raw_desc
+
+        try:
+            # 1. HMONITOR üzerinden GDI Device Name (szDevice örn: \\.\DISPLAY2) al
+            mi = MONITORINFOEXW()
+            mi.cbSize = ctypes.sizeof(MONITORINFOEXW)
+            if self.user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+                sz_device = mi.szDevice
+
+                # 2. EnumDisplayDevicesW ile DeviceID ve DeviceString al
+                dd = DISPLAY_DEVICEW()
+                dd.cb = ctypes.sizeof(DISPLAY_DEVICEW)
+                # EDD_GET_DEVICE_INTERFACE_NAME = 1
+                if self.user32.EnumDisplayDevicesW(sz_device, 0, ctypes.byref(dd), 1):
+                    dev_id = dd.DeviceID
+                    dev_str = dd.DeviceString
+
+                    # 3. PNP Manufacturer Kodunu çıkar (Örn: DISPLAY#LHCFFFF#... -> LHC)
+                    pnp_id_part = ""
+                    instance_part = ""
+                    if "DISPLAY#" in dev_id.upper():
+                        parts = dev_id.upper().split("DISPLAY#")[1].split("#")
+                        if len(parts) >= 2:
+                            pnp_id_part = parts[0]
+                            instance_part = parts[1]
+                            pnp_code = pnp_id_part[:3]
+                            brand = KNOWN_BRANDS.get(pnp_code, "")
+
+                    # 4. Registry üzerinden EDID descriptor parse et
+                    if pnp_id_part and instance_part:
+                        import winreg
+                        reg_path = rf"SYSTEM\CurrentControlSet\Enum\DISPLAY\{pnp_id_part}\{instance_part}\Device Parameters"
+                        try:
+                            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path) as key:
+                                edid, _ = winreg.QueryValueEx(key, "EDID")
+                                if isinstance(edid, (bytes, bytearray)) and len(edid) >= 128:
+                                    for offset in (54, 72, 90, 108):
+                                        if offset + 18 <= len(edid):
+                                            tag = edid[offset + 3]
+                                            if tag == 0xFC:
+                                                name_bytes = edid[offset + 5 : offset + 18]
+                                                model = name_bytes.decode("ascii", errors="ignore").split("\n")[0].split("\r")[0].strip()
+                                                if model:
+                                                    break
+                        except Exception:
+                            pass
+
+                    # Model veya Brand tespit edildiyse friendly_name oluştur
+                    if brand and model:
+                        friendly_name = f"{brand} {model}"
+                    elif brand and not model:
+                        if dev_str and "generic" not in dev_str.lower():
+                            friendly_name = f"{brand} {dev_str}"
+                        else:
+                            friendly_name = f"{brand} Monitör"
+                    elif model:
+                        friendly_name = model
+                    elif dev_str and "generic" not in dev_str.lower():
+                        friendly_name = dev_str
+        except Exception as e:
+            print(f"[!] _resolve_friendly_name hatası: {e}")
+
+        # Eğer hala generic ise
+        if not friendly_name or "generic" in friendly_name.lower():
+            friendly_name = f"Monitör #{global_idx + 1}"
+
+        return friendly_name, brand, model
+
     def enumerate_monitors(self) -> List[MonitorDevice]:
         """Sisteme bağlı tüm DDC/CI monitörleri tarar; parlaklık, ses ve giriş kaynağını okur."""
         with self._hw_lock:
@@ -391,10 +530,12 @@ class MonitorManager:
                             if self.dxva2.GetVCPFeatureAndVCPFeatureReply(handle, 0x14, ctypes.byref(pvct), ctypes.byref(cur_cp), ctypes.byref(mx_cp)):
                                 cp_val = cur_cp.value
 
+                            friendly_desc, brand, model = self._resolve_friendly_name(hmon, desc, global_idx)
+
                             dev = MonitorDevice(
                                 index=global_idx,
                                 hmonitor=hmon,
-                                description=desc,
+                                description=friendly_desc,
                                 current_brightness=cur_b.value,
                                 min_brightness=min_b.value,
                                 max_brightness=max_b.value,
@@ -403,7 +544,9 @@ class MonitorManager:
                                 current_contrast=cnt_val,
                                 current_color_preset=cp_val,
                                 current_mode="Standart",
-                                capabilities_string=caps
+                                capabilities_string=caps,
+                                brand=brand,
+                                model=model
                             )
                             devices.append(dev)
                             global_idx += 1

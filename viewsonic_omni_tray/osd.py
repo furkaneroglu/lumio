@@ -111,6 +111,12 @@ class OSDOverlay:
             fill_ratio = max(0.0, min(1.0, value / 100.0))
             bar_color = "#3b82f6" # Mavi
 
+        elif hud_type == "monitor":
+            self.title_label.config(text="Aktif Ekran Seçimi")
+            self.value_label.config(text=f"🖥️  {action_title or monitor_name}")
+            fill_ratio = 1.0
+            bar_color = "#3b82f6"
+
         elif hud_type == "sleep":
             self.value_label.config(text="🌙  Monitör Uyku Moduna Alındı")
             fill_ratio = 0.0

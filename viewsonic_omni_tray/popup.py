@@ -26,6 +26,8 @@ class SliderPopup:
         self._window: Optional[tk.Toplevel] = None
         self._mode_buttons: Dict[str, tk.Button] = {}
         self.input_buttons: Dict[int, tk.Button] = {}
+        self._monitor_buttons: Dict[int, tk.Button] = {}
+        self.mon_tab_frame: Optional[tk.Frame] = None
 
         self._create_window()
 
@@ -84,6 +86,11 @@ class SliderPopup:
             pady=2
         )
         self.status_badge.pack(side=tk.RIGHT)
+
+        # Monitör Seçici Sekmeler (ViewSonic, Rampage, Tüm Ekranlar)
+        self.mon_tab_frame = tk.Frame(main_frame, bg="#18181b")
+        self.mon_tab_frame.pack(fill=tk.X, pady=(2, 4))
+        self._build_monitor_tabs()
 
         sep1 = tk.Frame(main_frame, height=1, bg="#27272a")
         sep1.pack(fill=tk.X, pady=(4, 6))
@@ -421,6 +428,68 @@ class SliderPopup:
         if self.on_open_settings:
             self.on_open_settings()
 
+    def _build_monitor_tabs(self):
+        if self.mon_tab_frame is None:
+            return
+
+        for widget in self.mon_tab_frame.winfo_children():
+            widget.destroy()
+        self._monitor_buttons.clear()
+
+        devs = self.worker.devices
+        if len(devs) <= 1:
+            self.mon_tab_frame.pack_forget()
+            return
+
+        self.mon_tab_frame.pack(fill=tk.X, pady=(2, 6))
+
+        for d in devs:
+            label = f"🖥️ {d.short_name}"
+            btn = tk.Button(
+                self.mon_tab_frame,
+                text=label,
+                font=("Segoe UI", 8),
+                fg="#f4f4f5",
+                bg="#27272a",
+                activebackground="#3b82f6",
+                activeforeground="#ffffff",
+                relief=tk.FLAT,
+                bd=0,
+                pady=4,
+                command=lambda idx=d.index: self._on_monitor_tab_click(idx)
+            )
+            btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
+            self._monitor_buttons[d.index] = btn
+
+        sync_btn = tk.Button(
+            self.mon_tab_frame,
+            text="🔗 Tüm Ekranlar",
+            font=("Segoe UI", 8),
+            fg="#f4f4f5",
+            bg="#27272a",
+            activebackground="#3b82f6",
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            bd=0,
+            pady=4,
+            command=lambda: self._on_monitor_tab_click(-1)
+        )
+        sync_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
+        self._monitor_buttons[-1] = sync_btn
+
+        self._highlight_active_monitor(self.worker.active_index)
+
+    def _on_monitor_tab_click(self, idx: int):
+        self.worker.select_device(idx)
+        self._highlight_active_monitor(idx)
+
+    def _highlight_active_monitor(self, active_idx: int):
+        for idx, btn in self._monitor_buttons.items():
+            if idx == active_idx:
+                btn.config(bg="#3b82f6", fg="#ffffff", font=("Segoe UI", 8, "bold"))
+            else:
+                btn.config(bg="#27272a", fg="#d4d4d8", font=("Segoe UI", 8))
+
     def _highlight_active_mode(self, active_mode: str):
         self.active_mode_lbl.config(text=active_mode)
         for mode_key, btn in self._mode_buttons.items():
@@ -457,8 +526,21 @@ class SliderPopup:
 
         self._highlight_active_mode(active_mode)
         self._highlight_active_input(input_code)
+        self._highlight_active_monitor(self.worker.active_index)
 
-        if active_desc:
+        if self.worker.active_index == -1:
+            self.title_lbl.config(text="Çift Ekran (Senkron)")
+            names = " + ".join([d.short_name for d in self.worker.devices]) if self.worker.devices else "Tüm Ekranlar"
+            self.desc_lbl.config(text=f"{names} Senkron Kontrol")
+        elif self.worker.active_device:
+            dev = self.worker.active_device
+            if dev.brand:
+                self.title_lbl.config(text=f"{dev.brand} Monitör")
+                self.desc_lbl.config(text=dev.model or dev.description)
+            else:
+                self.title_lbl.config(text="Monitör")
+                self.desc_lbl.config(text=dev.description)
+        elif active_desc:
             self.desc_lbl.config(text=active_desc)
 
         if status == MonitorStatus.CONNECTED:
@@ -486,6 +568,13 @@ class SliderPopup:
     def show(self):
         if self._window is None:
             self._create_window()
+
+        if len(self.worker.devices) > 1:
+            self.height = 620
+        else:
+            self.height = 570
+
+        self._build_monitor_tabs()
 
         cur_b = self.worker.get_current_brightness()
         cur_c = self.worker.get_current_contrast()

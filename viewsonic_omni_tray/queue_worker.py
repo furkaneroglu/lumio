@@ -174,6 +174,14 @@ class AsyncWriteQueueWorker:
                 print(f"[!] Notification callback error: {e}")
 
     # --- Monitör Tarama & Seçim ---
+    @property
+    def active_monitor_name(self) -> str:
+        if self.active_index == -1:
+            return "Tüm Ekranlar (Senkron)"
+        if self.active_device:
+            return self.active_device.description
+        return "Monitör"
+
     def rescan_monitors(self) -> bool:
         try:
             devs = self.manager.enumerate_monitors()
@@ -192,25 +200,41 @@ class AsyncWriteQueueWorker:
             if not devs:
                 old_status = self.status
                 self.active_device = None
+                self.active_index = 0
                 self.status = MonitorStatus.DISCONNECTED
                 self.status_message = "Hiçbir DDC/CI monitör algılanamadı."
                 status = self.status
                 msg = self.status_message
                 should_notify_disconnected = (old_status == MonitorStatus.CONNECTED)
             else:
-                target = None
-                match_keyword = self.config.monitor_match.lower()
-                for d in devs:
-                    if match_keyword in d.description.lower():
-                        target = d
-                        break
-
-                if not target:
-                    target = devs[0]
-
                 prev_status = self.status
-                self.active_device = target
-                self.active_index = target.index
+
+                if self.active_index == -1:
+                    # Senkron / Tüm ekranlar modunu koru
+                    self.active_device = None
+                    target = devs[0]
+                    self.status_message = "Tüm Ekranlar (Senkron Kontrol) bağlandı."
+                else:
+                    target = None
+                    for d in devs:
+                        if d.index == self.active_index:
+                            target = d
+                            break
+
+                    if not target:
+                        match_keyword = self.config.monitor_match.lower()
+                        for d in devs:
+                            if match_keyword in d.description.lower():
+                                target = d
+                                break
+
+                    if not target:
+                        target = devs[0]
+
+                    self.active_device = target
+                    self.active_index = target.index
+                    self.status_message = f"{target.description} bağlandı."
+
                 self._current_brightness = target.current_brightness
                 self._target_brightness = target.current_brightness
                 self._current_contrast = target.current_contrast
@@ -221,7 +245,6 @@ class AsyncWriteQueueWorker:
                 self._target_volume = target.current_volume
                 self._current_input = target.current_input
                 self.status = MonitorStatus.CONNECTED
-                self.status_message = f"{target.description} bağlandı."
                 status = self.status
                 msg = self.status_message
                 should_notify_connected = prev_status in (MonitorStatus.SLEEPING, MonitorStatus.DISCONNECTED, MonitorStatus.ERROR)
@@ -241,41 +264,80 @@ class AsyncWriteQueueWorker:
         self._notify_contrast(self._current_contrast, from_hardware=True)
         self._notify_mode(self._current_mode, DISPLAY_MODES.get(self._current_mode, {}))
         self._notify_volume(self._current_volume, self._is_muted)
-        self._notify_input(self._current_input, target.input_name)
+        inp_name = target.input_name if (self.active_device and target) else "HDMI / DP"
+        self._notify_input(self._current_input, inp_name)
         self._notify_status(status, msg)
         self._notify_devices()
 
         return True
 
     def select_device(self, index: int):
-        selected_dev = None
+        selected_desc = ""
         with self._lock:
-            for d in self.devices:
-                if d.index == index:
-                    self.active_device = d
-                    self.active_index = index
-                    self._current_brightness = d.current_brightness
-                    self._target_brightness = d.current_brightness
-                    self._current_contrast = d.current_contrast
-                    self._target_contrast = d.current_contrast
-                    self._current_color_preset = d.current_color_preset
-                    self._current_mode = d.current_mode
-                    self._current_volume = d.current_volume
-                    self._target_volume = d.current_volume
-                    self._current_input = d.current_input
-                    self.status = MonitorStatus.CONNECTED
-                    self.status_message = f"{d.description} seçildi."
-                    selected_dev = d
-                    break
+            if index == -1:
+                self.active_index = -1
+                self.active_device = None
+                if self.devices:
+                    avg_b = int(sum(d.current_brightness for d in self.devices) / len(self.devices))
+                    avg_c = int(sum(d.current_contrast for d in self.devices) / len(self.devices))
+                    avg_v = int(sum(d.current_volume for d in self.devices) / len(self.devices))
+                    self._current_brightness = avg_b
+                    self._target_brightness = avg_b
+                    self._current_contrast = avg_c
+                    self._target_contrast = avg_c
+                    self._current_volume = avg_v
+                    self._target_volume = avg_v
+                    self._current_mode = self.devices[0].current_mode
+                    self._current_input = self.devices[0].current_input
+                self.status = MonitorStatus.CONNECTED
+                self.status_message = "Tüm Ekranlar (Senkron Kontrol) seçildi."
+                selected_desc = "Tüm Ekranlar (Senkron)"
+            else:
+                for d in self.devices:
+                    if d.index == index:
+                        self.active_device = d
+                        self.active_index = index
+                        self._current_brightness = d.current_brightness
+                        self._target_brightness = d.current_brightness
+                        self._current_contrast = d.current_contrast
+                        self._target_contrast = d.current_contrast
+                        self._current_color_preset = d.current_color_preset
+                        self._current_mode = d.current_mode
+                        self._current_volume = d.current_volume
+                        self._target_volume = d.current_volume
+                        self._current_input = d.current_input
+                        self.status = MonitorStatus.CONNECTED
+                        self.status_message = f"{d.description} seçildi."
+                        selected_desc = d.description
+                        break
 
-        if selected_dev:
+        if selected_desc:
+            input_name = self.active_device.input_name if self.active_device else "HDMI / DP"
             self._notify_brightness(self._current_brightness, from_hardware=True)
             self._notify_contrast(self._current_contrast, from_hardware=True)
             self._notify_mode(self._current_mode, DISPLAY_MODES.get(self._current_mode, {}))
             self._notify_volume(self._current_volume, self._is_muted)
-            self._notify_input(self._current_input, selected_dev.input_name)
+            self._notify_input(self._current_input, input_name)
             self._notify_status(self.status, self.status_message)
             self._notify_devices()
+
+    def cycle_active_monitor(self) -> str:
+        """Monitörler ve Senkron mod arasında döner: Monitor 0 -> Monitor 1 -> ... -> Tüm Ekranlar (-1) -> Monitor 0."""
+        with self._lock:
+            if not self.devices:
+                return "Monitör Yok"
+            if len(self.devices) == 1:
+                return self.devices[0].description
+
+            options = [d.index for d in self.devices] + [-1]
+            try:
+                cur_pos = options.index(self.active_index)
+                next_index = options[(cur_pos + 1) % len(options)]
+            except ValueError:
+                next_index = options[0]
+
+        self.select_device(next_index)
+        return self.active_monitor_name
 
     # --- Parlaklık Yönetimi ---
     def get_current_brightness(self) -> int:
@@ -336,7 +398,21 @@ class AsyncWriteQueueWorker:
 
         def _bg_apply():
             try:
-                self.manager.apply_display_mode(target_idx, mode_name)
+                if target_idx == -1:
+                    for d in list(self.devices):
+                        try:
+                            self.manager.apply_display_mode(d.index, mode_name)
+                            d.current_mode = mode_name
+                            d.current_brightness = target_b
+                            d.current_contrast = target_c
+                        except Exception as de:
+                            print(f"[!] Display mode error on #{d.index}: {de}")
+                else:
+                    self.manager.apply_display_mode(target_idx, mode_name)
+                    if self.active_device:
+                        self.active_device.current_mode = mode_name
+                        self.active_device.current_brightness = target_b
+                        self.active_device.current_contrast = target_c
             except Exception as e:
                 print(f"[!] Ekran modu uygulama hatası: {e}")
 
@@ -402,7 +478,14 @@ class AsyncWriteQueueWorker:
 
         def _bg_mute():
             try:
-                self.manager.set_mute(target_idx, muted)
+                if target_idx == -1:
+                    for d in list(self.devices):
+                        try:
+                            self.manager.set_mute(d.index, muted)
+                        except Exception as de:
+                            print(f"[!] Mute hatası #{d.index}: {de}")
+                else:
+                    self.manager.set_mute(target_idx, muted)
             except Exception as e:
                 print(f"[!] Mute hatası: {e}")
 
@@ -424,7 +507,17 @@ class AsyncWriteQueueWorker:
 
         def _bg_input():
             try:
-                self.manager.set_input_source(target_idx, source_code)
+                if target_idx == -1:
+                    for d in list(self.devices):
+                        try:
+                            self.manager.set_input_source(d.index, source_code)
+                            d.current_input = source_code
+                        except Exception as de:
+                            print(f"[!] Giriş değiştirme hatası #{d.index}: {de}")
+                else:
+                    self.manager.set_input_source(target_idx, source_code)
+                    if self.active_device:
+                        self.active_device.current_input = source_code
             except Exception as e:
                 print(f"[!] Giriş değiştirme hatası: {e}")
 
@@ -452,7 +545,14 @@ class AsyncWriteQueueWorker:
 
         def _bg_sleep():
             try:
-                self.manager.set_power_mode(target_idx, 0x04)
+                if target_idx == -1:
+                    for d in list(self.devices):
+                        try:
+                            self.manager.set_power_mode(d.index, 0x04)
+                        except Exception as de:
+                            print(f"[!] Uykuya alma hatası #{d.index}: {de}")
+                else:
+                    self.manager.set_power_mode(target_idx, 0x04)
             except Exception as e:
                 print(f"[!] Uykuya alma hatası: {e}")
 
@@ -465,7 +565,14 @@ class AsyncWriteQueueWorker:
 
         def _bg_wake():
             try:
-                self.manager.set_power_mode(target_idx, 0x01)
+                if target_idx == -1:
+                    for d in list(self.devices):
+                        try:
+                            self.manager.set_power_mode(d.index, 0x01)
+                        except Exception as de:
+                            print(f"[!] Uyandırma hatası #{d.index}: {de}")
+                else:
+                    self.manager.set_power_mode(target_idx, 0x01)
                 self.rescan_monitors()
             except Exception as e:
                 print(f"[!] Uyandırma hatası: {e}")
@@ -487,7 +594,7 @@ class AsyncWriteQueueWorker:
                 target_v = self._target_volume
                 cur_v = self._current_volume
                 target_dev_idx = self.active_index
-                has_dev = self.active_device is not None
+                has_dev = (self.active_device is not None) or (self.active_index == -1 and bool(self.devices))
 
             need_b = target_b != cur_b
             need_c = target_c != cur_c
@@ -522,23 +629,60 @@ class AsyncWriteQueueWorker:
 
             # 3. Donanıma yazma
             try:
-                if need_b:
-                    verified_b = self.manager.set_brightness(target_dev_idx, target_b)
-                    with self._lock:
-                        self._current_brightness = verified_b
-                    self._notify_brightness(verified_b, from_hardware=True)
+                if target_dev_idx == -1:
+                    # Senkron Mod: Tüm monitörlere yaz
+                    for dev in list(self.devices):
+                        try:
+                            if need_b:
+                                vb = self.manager.set_brightness(dev.index, target_b)
+                                dev.current_brightness = vb
+                            if need_c:
+                                vc = self.manager.set_contrast(dev.index, target_c)
+                                dev.current_contrast = vc
+                            if need_v:
+                                vv = self.manager.set_volume(dev.index, target_v)
+                                dev.current_volume = vv
+                        except Exception as de:
+                            print(f"[!] Senkron donanım yazma hatası (#{dev.index}): {de}")
 
-                if need_c:
-                    verified_c = self.manager.set_contrast(target_dev_idx, target_c)
                     with self._lock:
-                        self._current_contrast = verified_c
-                    self._notify_contrast(verified_c, from_hardware=True)
+                        if need_b:
+                            self._current_brightness = target_b
+                        if need_c:
+                            self._current_contrast = target_c
+                        if need_v:
+                            self._current_volume = target_v
+                    if need_b:
+                        self._notify_brightness(target_b, from_hardware=True)
+                    if need_c:
+                        self._notify_contrast(target_c, from_hardware=True)
+                    if need_v:
+                        self._notify_volume(target_v, self._is_muted)
+                else:
+                    # Tekil Monitör Modu
+                    if need_b:
+                        verified_b = self.manager.set_brightness(target_dev_idx, target_b)
+                        with self._lock:
+                            self._current_brightness = verified_b
+                            if self.active_device:
+                                self.active_device.current_brightness = verified_b
+                        self._notify_brightness(verified_b, from_hardware=True)
 
-                if need_v:
-                    verified_v = self.manager.set_volume(target_dev_idx, target_v)
-                    with self._lock:
-                        self._current_volume = verified_v
-                    self._notify_volume(verified_v, self._is_muted)
+                    if need_c:
+                        verified_c = self.manager.set_contrast(target_dev_idx, target_c)
+                        with self._lock:
+                            self._current_contrast = verified_c
+                            if self.active_device:
+                                self.active_device.current_contrast = verified_c
+                        self._notify_contrast(verified_c, from_hardware=True)
+
+                    if need_v:
+                        verified_v = self.manager.set_volume(target_dev_idx, target_v)
+                        with self._lock:
+                            self._current_volume = verified_v
+                            if self.active_device:
+                                self.active_device.current_volume = verified_v
+                        self._notify_volume(verified_v, self._is_muted)
 
                 self._last_write_timestamp = time.time()
 
@@ -587,7 +731,7 @@ class AsyncWriteQueueWorker:
                 success = self.rescan_monitors()
                 if success:
                     self._request_event.set()
-            elif self.status == MonitorStatus.CONNECTED and self.active_device is not None:
+            elif self.status == MonitorStatus.CONNECTED and self.active_index >= 0 and self.active_device is not None:
                 idle_time = time.time() - self._last_write_timestamp
                 if idle_time > self.watchdog_interval:
                     try:
@@ -597,6 +741,8 @@ class AsyncWriteQueueWorker:
                             if hw_val != self._current_brightness and not self._request_event.is_set():
                                 self._current_brightness = hw_val
                                 self._target_brightness = hw_val
+                                if self.active_device:
+                                    self.active_device.current_brightness = hw_val
                                 notify = True
                         if notify:
                             self._notify_brightness(hw_val, from_hardware=True)

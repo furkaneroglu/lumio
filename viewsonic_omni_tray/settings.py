@@ -79,7 +79,13 @@ class SettingsWindow:
         )
         self.monitor_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
         if self.monitor_options:
-            self.monitor_combo.current(0)
+            cur_idx = self.worker.active_index
+            found_idx = 0
+            for i, opt in enumerate(self.monitor_options):
+                if opt.startswith(f"[{cur_idx}]"):
+                    found_idx = i
+                    break
+            self.monitor_combo.current(found_idx)
 
         rescan_btn = tk.Button(
             mon_frame,
@@ -151,22 +157,30 @@ class SettingsWindow:
 
         self.hotkey_entries = {}
         hotkey_labels = [
-            ("brightness_up", "Parlaklık Artır:"),
-            ("brightness_down", "Parlaklık Azalt:"),
-            ("profile_day", "Gündüz Profili:"),
-            ("profile_night", "Gece Profili:"),
-            ("profile_read", "Okuma Profili:"),
-            ("profile_game", "Oyun Profili:")
+            ("brightness_up", "Parlaklık +:"),
+            ("brightness_down", "Parlaklık -:"),
+            ("contrast_up", "Kontrast +:"),
+            ("contrast_down", "Kontrast -:"),
+            ("cycle_mode", "Ekran Modu:"),
+            ("cycle_monitor", "Ekran Değiştir:"),
+            ("volume_up", "Ses +:"),
+            ("volume_down", "Ses -:"),
+            ("volume_mute", "Sessiz (Mute):"),
+            ("cycle_input", "Giriş Kaynağı:"),
+            ("sleep_monitor", "Uyku Modu:"),
+            ("profile_day", "Gündüz Profili:")
         ]
 
         for i, (key_id, desc) in enumerate(hotkey_labels):
+            r = i // 2
+            c = i % 2
             tk.Label(
                 hotkey_frame,
                 text=desc,
                 font=("Segoe UI", 8),
                 fg="#a1a1aa",
                 bg="#18181b"
-            ).grid(row=i, column=0, sticky="w", pady=2)
+            ).grid(row=r, column=c * 2, sticky="w", padx=(10 if c > 0 else 0, 4), pady=2)
 
             val = self.config.hotkeys.get(key_id, "")
             e = tk.Entry(
@@ -174,11 +188,12 @@ class SettingsWindow:
                 font=("Segoe UI", 8),
                 bg="#27272a",
                 fg="#f4f4f5",
-                insertbackground="#f59e0b"
+                insertbackground="#f59e0b",
+                width=16
             )
             e.insert(0, val)
-            e.grid(row=i, column=1, sticky="ew", padx=(10, 0), pady=2)
-            hotkey_frame.columnconfigure(1, weight=1)
+            e.grid(row=r, column=c * 2 + 1, sticky="ew", padx=(0, 6), pady=2)
+            hotkey_frame.columnconfigure(c * 2 + 1, weight=1)
             self.hotkey_entries[key_id] = e
 
         step_frame = tk.Frame(sec3, bg="#18181b")
@@ -288,6 +303,8 @@ class SettingsWindow:
         self.monitor_options = []
         for dev in self.worker.devices:
             self.monitor_options.append(f"[{dev.index}] {dev.description}")
+        if len(self.worker.devices) > 1:
+            self.monitor_options.append("[-1] 🔗 Tüm Ekranlar (Senkron Kontrol)")
         if not self.monitor_options:
             self.monitor_options.append("Monitör bulunamadı")
 
