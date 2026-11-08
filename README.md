@@ -56,7 +56,7 @@ All shortcuts can be changed in Settings or in `%APPDATA%\Lumio\config.json` (se
 ## Project Structure
 
 ```
-viewsonic-omni-brightness/
+lumio/
 ├── .github/workflows/        # CI: tests + EXE build on every push, release on tags
 ├── lumio/
 │   ├── main.py               # Entry point
@@ -82,8 +82,8 @@ viewsonic-omni-brightness/
 ## Development
 
 ```bash
-git clone https://github.com/furkaneroglu/viewsonic-omni-brightness.git
-cd viewsonic-omni-brightness
+git clone https://github.com/furkaneroglu/lumio.git
+cd lumio
 pip install -r requirements.txt
 
 python -m lumio.main          # run from source
