@@ -1,5 +1,5 @@
 """
-ViewSonic OMNI DDC/CI Tray - Modern / Minimal UI Kit
+Lumio - Modern / Minimal UI Kit
 Windows 11 görünümlü ortak arayüz bileşenleri: tema, kaydırıcı, segment seçici,
 ikon butonu, anahtar (toggle) ve buton. Kenar yumuşatma (antialias) için bileşenler
 Pillow ile yüksek çözünürlükte çizilip küçültülür; metinler Tk tarafından (ClearType) çizilir.
@@ -422,6 +422,97 @@ class Segmented(tk.Canvas):
                 fill=Palette.TEXT if selected else Palette.MUTED,
                 font=self.t.font(self._font_size, "bold" if selected else "normal")
             )
+
+
+class ChipGroup(tk.Canvas):
+    """Birden fazla seçilebilen, yan yana yuvarlak düğmeler (örn. görünür giriş kaynakları)."""
+
+    def __init__(self, parent: tk.Misc, theme: Theme, options: Sequence[Tuple[Any, str]],
+                 selected: Sequence[Any] = (), command: Optional[Callable[[List[Any]], None]] = None,
+                 bg: str = Palette.BG, min_selected: int = 1):
+        self.t = theme
+        self._font = theme.font(8)
+        self._font_bold = theme.font(8, "bold")
+        self._items: List[Tuple[Any, str]] = list(options)
+        self._chosen: List[Any] = [k for k, _ in self._items if k in selected]
+        self._command = command
+        self._min = min_selected
+        self._hover_idx: Optional[int] = None
+        self._bg = bg
+        self._photo: Optional[ImageTk.PhotoImage] = None
+
+        measure = tkfont.Font(root=parent, font=self._font_bold)
+        self._pad_x, self._gap = theme.px(12), theme.px(6)
+        self._widths = [measure.measure(label) + 2 * self._pad_x for _, label in self._items]
+        self._chip_h = theme.px(28)
+        total_w = sum(self._widths) + self._gap * max(0, len(self._widths) - 1)
+        super().__init__(parent, width=max(1, total_w), height=self._chip_h, bg=bg,
+                         highlightthickness=0, bd=0, cursor="hand2")
+        self.bind("<Motion>", self._on_motion)
+        self.bind("<Leave>", lambda e: self._set_hover(None))
+        self.bind("<Button-1>", self._on_click)
+        self._redraw()
+
+    def get(self) -> List[Any]:
+        return [k for k, _ in self._items if k in self._chosen]
+
+    def _index_at(self, x: float) -> Optional[int]:
+        pos = 0
+        for i, w in enumerate(self._widths):
+            if pos <= x < pos + w:
+                return i
+            pos += w + self._gap
+        return None
+
+    def _on_motion(self, event):
+        self._set_hover(self._index_at(event.x))
+
+    def _set_hover(self, idx: Optional[int]):
+        if idx != self._hover_idx:
+            self._hover_idx = idx
+            self._redraw()
+
+    def _on_click(self, event):
+        idx = self._index_at(event.x)
+        if idx is None:
+            return
+        key = self._items[idx][0]
+        if key in self._chosen:
+            if len(self._chosen) <= self._min:
+                return  # en az bir seçenek kalmalı
+            self._chosen.remove(key)
+        else:
+            self._chosen.append(key)
+        self._redraw()
+        if self._command:
+            self._command(self.get())
+
+    def _redraw(self):
+        S = _SS
+        w, h = int(self.cget("width")), self._chip_h
+        img = Image.new("RGB", (w * S, h * S), self._bg)
+        d = ImageDraw.Draw(img)
+        pos = 0
+        for i, ((key, _), cw) in enumerate(zip(self._items, self._widths)):
+            on = key in self._chosen
+            if on:
+                fill = Palette.SELECTED
+            else:
+                fill = Palette.SURFACE_HOVER if i == self._hover_idx else Palette.SURFACE
+            d.rounded_rectangle([pos * S, 0, (pos + cw) * S - 1, h * S - 1], radius=h * S / 2, fill=fill)
+            if on:
+                d.rounded_rectangle([pos * S, 0, (pos + cw) * S - 1, h * S - 1], radius=h * S / 2,
+                                    outline=Palette.ACCENT, width=max(1, int(S * self.t.scale)))
+            pos += cw + self._gap
+        self._photo = ImageTk.PhotoImage(img.resize((w, h), Image.LANCZOS))
+        self.delete("all")
+        self.create_image(0, 0, anchor="nw", image=self._photo)
+        pos = 0
+        for (key, label), cw in zip(self._items, self._widths):
+            on = key in self._chosen
+            self.create_text(pos + cw / 2, h / 2, text=label, fill=Palette.TEXT if on else Palette.MUTED,
+                             font=self._font_bold if on else self._font)
+            pos += cw + self._gap
 
 
 class IconButton(tk.Canvas):

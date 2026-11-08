@@ -1,16 +1,18 @@
-# ViewSonic OMNI DDC/CI Brightness Control
+# Lumio
+
+**Brand-independent monitor control for Windows over DDC/CI.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011-blue.svg)](https://microsoft.com/windows)
 [![Python](https://img.shields.io/badge/Python-3.8%2B-brightgreen.svg)](https://python.org)
 
-A lightweight system tray app that controls **ViewSonic OMNI** (and other DDC/CI-compliant) monitors over HDMI / DisplayPort using the VESA DDC/CI (MCCS) protocol: brightness, contrast, screen modes, speaker volume, input source and standby — with a minimal Windows 11 style flyout, global hotkeys and automation.
+A lightweight system tray app that controls any DDC/CI-compliant external monitor (Dell, LG, Samsung, ASUS, BenQ, ViewSonic, AOC, …) over HDMI / DisplayPort using the VESA DDC/CI (MCCS) protocol: brightness, contrast, screen modes, speaker volume, input source and standby — with a minimal Windows 11 style flyout, global hotkeys and automation.
 
 ---
 
 ## Quick Start
 
-1. Download **`ViewSonic_OMNI_Brightness.exe`** from the [Releases](../../releases) page (or the latest [Actions](../../actions) build).
+1. Download **`Lumio.exe`** from the [Releases](../../releases) page (or the latest [Actions](../../actions) build).
 2. Double-click it. The app appears in the system tray (near the clock).
 3. Click the tray icon for the control panel; right-click for the full menu.
 4. *(Optional)* Settings → **Windows ile başlat** to start with Windows.
@@ -25,7 +27,8 @@ A lightweight system tray app that controls **ViewSonic OMNI** (and other DDC/CI
 * **Per-app screen modes** — switch to *Oyun* when a game is in front, *Film* for your video player; the previous settings are restored when you leave. Pick apps directly from a list of open windows.
 * **Multi-monitor sync with calibration** — control all monitors at once ("Tümü") and set a per-monitor brightness offset so different panels look equally bright.
 * **Remembers your choices** — last selected monitor and each monitor's screen mode survive restarts.
-* **Input switching (VCP 0x60)**, **speaker volume & mute (VCP 0x62 / 0x8D)**, **standby (VCP 0xD6)**.
+* **Works with any brand** — inputs and features are read from each monitor's own MCCS capability report; unused legacy inputs (VGA/DVI) are hidden by default and can be toggled per monitor.
+* **Input switching (VCP 0x60)**, **speaker volume & mute (VCP 0x62 / 0x8D)** when supported, **standby (VCP 0xD6)**.
 * **Global hotkeys + on-screen indicator** — compact OSD pill that fades out.
 * **Hardware protection** — debounce (80 ms) and throttling (100 ms) keep the monitor's I2C bus safe; a watchdog recovers after sleep or disconnects.
 
@@ -46,7 +49,7 @@ A lightweight system tray app that controls **ViewSonic OMNI** (and other DDC/CI
 | `Ctrl + Alt + S` | Cycle active monitor / all monitors |
 | `Ctrl + Alt + P` | Put monitor to standby |
 
-All shortcuts can be changed in Settings or in `%APPDATA%\ViewSonicOmniTray\config.json`.
+All shortcuts can be changed in Settings or in `%APPDATA%\Lumio\config.json` (settings from older versions are migrated automatically).
 
 ---
 
@@ -55,7 +58,7 @@ All shortcuts can be changed in Settings or in `%APPDATA%\ViewSonicOmniTray\conf
 ```
 viewsonic-omni-brightness/
 ├── .github/workflows/        # CI: tests + EXE build on every push, release on tags
-├── viewsonic_omni_tray/
+├── lumio/
 │   ├── main.py               # Entry point
 │   ├── app.py                # Coordinator & single-instance mutex
 │   ├── monitor_manager.py    # DDC/CI hardware layer (dxva2 / user32 via ctypes)
@@ -83,9 +86,9 @@ git clone https://github.com/furkaneroglu/viewsonic-omni-brightness.git
 cd viewsonic-omni-brightness
 pip install -r requirements.txt
 
-python -m viewsonic_omni_tray.main          # run from source
+python -m lumio.main          # run from source
 python -m unittest discover -s tests -v     # run tests (uses a temporary settings folder)
-python build.py                              # build ViewSonic_OMNI_Brightness.exe
+python build.py                              # build Lumio.exe
 ```
 
 Requirements: Windows 10/11, Python 3.8+, monitor connected directly to the GPU over HDMI/DP, and **DDC/CI enabled** in the monitor's OSD menu (`Setup Menu → DDC/CI → On`).
@@ -94,7 +97,7 @@ Requirements: Windows 10/11, Python 3.8+, monitor connected directly to the GPU 
 
 ## Türkçe Özet
 
-ViewSonic OMNI (ve diğer DDC/CI uyumlu) monitörlerin parlaklık, kontrast, ekran modu, ses ve giriş kaynağını sistem tepsisinden yöneten hafif bir Windows uygulamasıdır.
+Lumio, DDC/CI destekleyen her marka harici monitörün parlaklık, kontrast, ekran modu, ses ve giriş kaynağını sistem tepsisinden yöneten hafif bir Windows uygulamasıdır. Giriş kaynakları ve özellikler her monitörün kendi bildirdiği yetenek listesinden okunur.
 
 * **Sade kontrol paneli:** Tepsi simgesine tıklayın; kaydırıcılar fare tekerleğiyle de çalışır.
 * **Otomatik parlaklık:** Günün saatine göre parlaklık yavaşça değişir. Elle değiştirirseniz bir sonraki saate kadar karışmaz.

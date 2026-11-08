@@ -1,5 +1,5 @@
 """
-ViewSonic OMNI DDC/CI Tray - Quick Control Flyout (Tray UI)
+Lumio - Quick Control Flyout (Tray UI)
 Görev çubuğunun üzerinde açılan, Windows 11 tarzı minimal hızlı kontrol paneli:
 parlaklık, kontrast, ses, ekran modu, giriş kaynağı ve monitör seçimi.
 """
@@ -10,7 +10,7 @@ from typing import Optional, Callable, Dict, Tuple
 
 from .config import ConfigManager
 from .queue_worker import AsyncWriteQueueWorker, MonitorStatus
-from .monitor_manager import INPUT_SOURCES, DISPLAY_MODES
+from .monitor_manager import DISPLAY_MODES, input_name, input_short_name
 from .ui_kit import (
     Palette, Icons, get_theme, style_window, get_work_area, Fader,
     Slider, Segmented, IconButton,
@@ -102,15 +102,21 @@ class SliderPopup:
         )
 
         # 4. Ekran modu
+        self.volume_row = self.v_slider.master
+        self.sliders_frame = sliders
         self._section_label(body, "Ekran modu")
         self.mode_seg = Segmented(body, t, [(k, k) for k in DISPLAY_MODES], command=self._on_mode_click,
                                   font_size=8)
         self.mode_seg.pack(fill=tk.X)
 
         # 5. Giriş kaynağı
-        self._section_label(body, "Giriş kaynağı")
-        self.input_seg = Segmented(body, t, list(INPUT_SOURCES.items()), command=self._on_input_selected)
+        # 5. Giriş kaynağı (seçili monitörün bildirdiği girişler; tek giriş varsa gizlenir)
+        self.input_section = tk.Frame(body, bg=bg)
+        self.input_section.pack(fill=tk.X)
+        self._section_label(self.input_section, "Giriş kaynağı")
+        self.input_seg = Segmented(self.input_section, t, [], command=self._on_input_selected)
         self.input_seg.pack(fill=tk.X)
+        self._inputs_sig: Optional[Tuple] = None
 
     def _section_label(self, parent: tk.Misc, text: str):
         tk.Label(parent, text=text, font=self.t.font(8), fg=Palette.FAINT, bg=Palette.BG,
@@ -188,6 +194,23 @@ class SliderPopup:
         )
         self.v_slider.set_dimmed(muted)
 
+    def _sync_inputs_and_features(self):
+        """Giriş listesini ve ses satırını seçili monitörün yeteneklerine göre günceller."""
+        inputs = tuple(self.worker.visible_inputs())
+        if inputs != self._inputs_sig:
+            self._inputs_sig = inputs
+            self.input_seg.set_options([(c, input_short_name(c)) for c in inputs])
+            if len(inputs) > 1:
+                self.input_section.pack(fill=tk.X)
+            else:
+                self.input_section.pack_forget()
+
+        if self.worker.supports_volume:
+            if not self.volume_row.winfo_ismapped():
+                self.volume_row.pack(fill=tk.X, pady=self.t.px(2))
+        else:
+            self.volume_row.pack_forget()
+
     def _sync_monitor_selector(self):
         devs = list(self.worker.devices)
         sig = tuple((d.index, d.short_name) for d in devs)
@@ -222,6 +245,7 @@ class SliderPopup:
         self.input_seg.set(input_code)
         self._apply_mute_visual(self.worker.is_muted)
         self._sync_monitor_selector()
+        self._sync_inputs_and_features()
 
         # Başlık ve alt bilgi
         detail = ""
@@ -230,7 +254,7 @@ class SliderPopup:
             detail = " + ".join(d.short_name for d in self.worker.devices)
         elif self.worker.active_device:
             self.title_lbl.config(text=self.worker.active_device.description)
-            detail = INPUT_SOURCES.get(input_code, "")
+            detail = input_name(input_code) if input_code else ""
         elif active_desc:
             self.title_lbl.config(text=active_desc)
 

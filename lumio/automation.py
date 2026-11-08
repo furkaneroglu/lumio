@@ -1,5 +1,5 @@
 """
-ViewSonic OMNI DDC/CI Tray - Otomasyon Servisleri
+Lumio - Otomasyon Servisleri
 
 1. ScheduleEngine   : Günün saatine göre otomatik parlaklık (yumuşak geçişli).
                       Kullanıcı parlaklığı elle değiştirirse bir sonraki plan saatine kadar karışmaz.

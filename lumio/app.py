@@ -1,5 +1,5 @@
 """
-ViewSonic OMNI DDC/CI Tray - Main Application Coordinator
+Lumio - Main Application Coordinator
 Tekil örnek (Single Instance) denetimi, Tkinter ana döngüsü ve tüm modüllerin koordinasyonu.
 Parlaklık, Ses, Giriş Kaynağı ve Güç kontrollerini birbirine bağlar.
 """
@@ -21,7 +21,7 @@ from .hotkeys import HotkeyService
 from .tray import TrayApp
 from .automation import AutomationService
 
-MUTEX_NAME = "Global\\ViewSonicOmniTray_SingleInstance_Mutex_App"
+MUTEX_NAME = "Global\\Lumio_SingleInstance_Mutex"
 
 def set_dpi_awareness():
     try:
@@ -55,7 +55,7 @@ class SingleInstanceLock:
             self.mutex = None
 
 
-class ViewSonicOmniApp:
+class LumioApp:
     """Tüm modülleri birbirine bağlayan ana koordinatör sınıf."""
 
     def __init__(self):
@@ -63,7 +63,7 @@ class ViewSonicOmniApp:
 
         self.lock = SingleInstanceLock()
         if not self.lock.acquire():
-            print("[!] ViewSonic OMNI Tray uygulaması zaten arka planda çalışıyor.")
+            print("[!] Lumio zaten arka planda çalışıyor.")
             sys.exit(0)
 
         # 1. Temel Servisler ve Donanım Katmanı
@@ -209,3 +209,4 @@ class ViewSonicOmniApp:
         self.worker.debounce_sec = max(0.04, self.config.debounce_ms / 1000.0)
         self.worker.watchdog_interval = max(5.0, float(self.config.watchdog_interval_s))
         self.automation.reload()
+        self._refresh_all_ui()

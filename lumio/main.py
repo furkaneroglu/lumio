@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ViewSonic OMNI DDC/CI Tray Application Entry Point
+Lumio - Uygulama Giriş Noktası
 """
 
 import sys
@@ -26,12 +26,12 @@ parent_dir = os.path.dirname(current_dir)
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from viewsonic_omni_tray.app import ViewSonicOmniApp
-from viewsonic_omni_tray.config import get_config_dir
+from lumio.app import LumioApp
+from lumio.config import get_config_dir
 
 def main():
     try:
-        app = ViewSonicOmniApp()
+        app = LumioApp()
         app.run()
     except Exception as e:
         # Olası bir hatada error.log dosyasına yaz

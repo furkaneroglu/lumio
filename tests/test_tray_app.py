@@ -1,5 +1,5 @@
 """
-ViewSonic OMNI DDC/CI Tray - Comprehensive Test Suite
+Lumio - Comprehensive Test Suite
 Tüm mimari katmanları: MonitorManager, AsyncWriteQueueWorker, ConfigManager,
 NotificationEngine, HotkeyService ve Win32 Mutex korumasını test eder.
 """
@@ -31,12 +31,12 @@ repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if repo_dir not in sys.path:
     sys.path.insert(0, repo_dir)
 
-from viewsonic_omni_tray.config import ConfigManager, DEFAULT_CONFIG
-from viewsonic_omni_tray.monitor_manager import MonitorManager, MonitorDevice, DDCCIDisconnectedError, DDCCIError
-from viewsonic_omni_tray.queue_worker import AsyncWriteQueueWorker, MonitorStatus
-from viewsonic_omni_tray.notifications import NotificationEngine
-from viewsonic_omni_tray.tray import create_tray_image
-from viewsonic_omni_tray.app import SingleInstanceLock
+from lumio.config import ConfigManager, DEFAULT_CONFIG
+from lumio.monitor_manager import MonitorManager, MonitorDevice, DDCCIDisconnectedError, DDCCIError
+from lumio.queue_worker import AsyncWriteQueueWorker, MonitorStatus
+from lumio.notifications import NotificationEngine
+from lumio.tray import create_tray_image
+from lumio.app import SingleInstanceLock
 
 
 class TestConfigManager(unittest.TestCase):
@@ -44,7 +44,7 @@ class TestConfigManager(unittest.TestCase):
 
     def test_config_defaults(self):
         cfg = ConfigManager()
-        self.assertEqual(cfg.monitor_match, "ViewSonic")
+        self.assertEqual(cfg.monitor_match, "")
         self.assertIn("Gündüz", cfg.profiles)
         self.assertEqual(cfg.profiles["Gündüz"], 80)
         self.assertEqual(cfg.profiles["Gece"], 20)
@@ -170,7 +170,7 @@ class TestTrayImageRendering(unittest.TestCase):
         self.assertEqual(img_disc.size, (64, 64))
 
     def test_dynamic_tray_menu(self):
-        from viewsonic_omni_tray.tray import TrayApp
+        from lumio.tray import TrayApp
         cfg = ConfigManager()
         worker = AsyncWriteQueueWorker(cfg)
         worker.manager = MagicMock()
@@ -199,7 +199,7 @@ class TestDisplayModes(unittest.TestCase):
     """Ekran Modları (ViewMode) ve Kontrast Testleri"""
 
     def test_display_modes_definition(self):
-        from viewsonic_omni_tray.monitor_manager import DISPLAY_MODES
+        from lumio.monitor_manager import DISPLAY_MODES
         for required_mode in ["Oyun", "Film", "Metin", "Standart", "Gece"]:
             self.assertIn(required_mode, DISPLAY_MODES)
             data = DISPLAY_MODES[required_mode]
@@ -210,8 +210,8 @@ class TestDisplayModes(unittest.TestCase):
             self.assertTrue(0 <= data["contrast"] <= 100)
 
     def test_cycle_display_modes(self):
-        from viewsonic_omni_tray.config import ConfigManager
-        from viewsonic_omni_tray.queue_worker import AsyncWriteQueueWorker
+        from lumio.config import ConfigManager
+        from lumio.queue_worker import AsyncWriteQueueWorker
         cfg = ConfigManager()
         worker = AsyncWriteQueueWorker(cfg)
         worker.manager = MagicMock()
@@ -230,32 +230,78 @@ class TestDisplayModes(unittest.TestCase):
 
 
 class TestMultiMonitorAndSync(unittest.TestCase):
-    """Çoklu Monitör (ViewSonic + Rampage) ve Senkron Mod Testleri"""
+    """Çoklu Monitör ve Senkron Mod Testleri (marka bağımsız)"""
 
-    def test_monitor_device_brand_and_properties(self):
-        dev_vs = MonitorDevice(
-            index=0,
-            hmonitor=1001,
-            description="ViewSonic VX2718-2KPC",
-            current_brightness=60,
-            brand="ViewSonic",
-            model="VX2718-2KPC"
-        )
-        self.assertTrue(dev_vs.is_viewsonic)
-        self.assertFalse(dev_vs.is_rampage)
-        self.assertEqual(dev_vs.short_name, "ViewSonic")
+    def test_monitor_device_short_name(self):
+        dev = MonitorDevice(0, 1001, "Dell U2720Q", 60, brand="Dell", model="U2720Q")
+        self.assertEqual(dev.short_name, "Dell")
+        generic = MonitorDevice(1, 1002, "Generic PnP Monitor", 60)
+        self.assertEqual(generic.short_name, "Ekran 2")
 
-        dev_rp = MonitorDevice(
-            index=1,
-            hmonitor=1002,
-            description="Rampage GL27R200Q",
-            current_brightness=100,
-            brand="Rampage",
-            model="GL27R200Q"
-        )
-        self.assertFalse(dev_rp.is_viewsonic)
-        self.assertTrue(dev_rp.is_rampage)
-        self.assertEqual(dev_rp.short_name, "Rampage")
+    def test_capabilities_parsing_and_inputs(self):
+        from lumio.monitor_manager import parse_vcp_capabilities
+        # Gerçek monitörlerden alınmış yetenek dizgileri (boşluksuz / düzensiz yazımlar dahil)
+        caps_a = ("(prot(monitor)type(LCD)model(RTK)cmds(01 02 03 07 0C E3 F3)vcp(02 04 05 06 08 0B 0C 10 12 "
+                  "14(01 02 04 05 06 08 0B) 16 18 1A 52 60(01 03 04 0F 10 11 12) 87 AC AE B2 B6 C6 C8 CA "
+                  "CC(01 02 03 04 06 0A 0D) D6(01 04 05) DF FD FF)mswhql(1)asset_eep(40)mccs_ver(2.2))")
+        caps_b = ("(prot(monitor)type(lcd)MStarcmds(01 02 03 07 0C E3 F3)vcp(02 04 05 08 10 12 14(05 06 08 0B 0C 0D)"
+                  "16 18 1A 60( 11 12 0F 10) 62 AC AE B2 B6 C6 C8 C9 D6(01 04 05)  DF FD FF)mccs_ver(2.1)mswhql(1))")
+        parsed_a = parse_vcp_capabilities(caps_a)
+        parsed_b = parse_vcp_capabilities(caps_b)
+        self.assertEqual(parsed_a[0x60], [0x01, 0x03, 0x04, 0x0F, 0x10, 0x11, 0x12])
+        self.assertEqual(parsed_b[0x60], [0x11, 0x12, 0x0F, 0x10])
+        self.assertIn(0x16, parsed_b)          # '...0D)16' boşluksuz yazım
+        self.assertNotIn(0x62, parsed_a)
+        self.assertIn(0x62, parsed_b)
+        self.assertNotIn(0x01, parsed_a)       # cmds(01 ...) vcp listesine karışmamalı
+
+        dev = MonitorDevice(0, 1, "Test", 50, current_input=0x12, capabilities_string=caps_a)
+        self.assertEqual(dev.reported_inputs, [0x01, 0x03, 0x04, 0x0F, 0x10, 0x11, 0x12])
+        self.assertEqual(dev.default_visible_inputs, [0x0F, 0x10, 0x11, 0x12])  # VGA / DVI varsayılan gizli
+        self.assertTrue(dev.supports(0x10))
+        self.assertFalse(dev.supports(0x62))
+
+        no_caps = MonitorDevice(1, 2, "Test 2", 50, current_input=0x1B)
+        self.assertEqual(no_caps.reported_inputs, [0x0F, 0x11, 0x12, 0x1B])     # varsayılan + etkin giriş
+
+    def test_visible_inputs_user_choice_and_sync(self):
+        cfg = ConfigManager()
+        worker = AsyncWriteQueueWorker(cfg, MagicMock())
+        caps = "vcp(10 60(0F 10 11 12))"
+        a = MonitorDevice(0, 1, "Monitor A", 50, current_input=0x11, capabilities_string=caps)
+        b = MonitorDevice(1, 2, "Monitor B", 50, current_input=0x0F, capabilities_string="vcp(10 60(0F 11))")
+        worker.devices = [a, b]
+        worker.select_device(0)
+        self.assertEqual(worker.visible_inputs(), [0x0F, 0x10, 0x11, 0x12])
+        cfg.set_visible_inputs("Monitor A", [0x11, 0x0F])
+        self.assertEqual(worker.visible_inputs(), [0x0F, 0x11])
+        worker.select_device(-1)
+        self.assertEqual(worker.visible_inputs(), [0x0F, 0x11])  # ortak girişler
+        cfg.set_visible_inputs("Monitor A", None)
+
+    def test_legacy_config_is_migrated(self):
+        import json, shutil
+        from lumio import config as config_module
+        appdata = os.environ["APPDATA"]
+        new_dir = os.path.join(appdata, config_module.APP_NAME)
+        old_dir = os.path.join(appdata, "ViewSonicOmniTray")
+        backup = None
+        new_path = os.path.join(new_dir, "config.json")
+        if os.path.exists(new_path):
+            backup = open(new_path, encoding="utf-8").read()
+            os.remove(new_path)
+        try:
+            os.makedirs(old_dir, exist_ok=True)
+            with open(os.path.join(old_dir, "config.json"), "w", encoding="utf-8") as f:
+                json.dump({"step_size": 7}, f)
+            cfg = ConfigManager()
+            self.assertEqual(cfg.step_size, 7)
+            self.assertTrue(os.path.exists(new_path))
+        finally:
+            shutil.rmtree(old_dir, ignore_errors=True)
+            if backup is not None:
+                with open(new_path, "w", encoding="utf-8") as f:
+                    f.write(backup)
 
     def test_select_device_and_cycle(self):
         cfg = ConfigManager()
@@ -332,7 +378,7 @@ class TestAutomation(unittest.TestCase):
 
     def tearDown(self):
         # Testler birbirini etkilemesin: geçici ayar dosyasını sil (sonraki ConfigManager varsayılanla başlar)
-        from viewsonic_omni_tray.config import get_config_path
+        from lumio.config import get_config_path
         try:
             os.remove(get_config_path())
         except OSError:
@@ -347,7 +393,7 @@ class TestAutomation(unittest.TestCase):
         w.set_brightness.side_effect = lambda v, immediate_ui=True: state.__setitem__("b", v)
 
         def _apply(mode_name, brightness=None, contrast=None, wait_timeout=0.0):
-            from viewsonic_omni_tray.monitor_manager import DISPLAY_MODES
+            from lumio.monitor_manager import DISPLAY_MODES
             state["m"] = mode_name
             state["b"] = brightness if brightness is not None else DISPLAY_MODES[mode_name]["brightness"]
             state["c"] = contrast if contrast is not None else DISPLAY_MODES[mode_name]["contrast"]
@@ -356,7 +402,7 @@ class TestAutomation(unittest.TestCase):
         return w, state
 
     def test_schedule_interpolation_wraps_midnight(self):
-        from viewsonic_omni_tray.automation import normalize_points, scheduled_brightness
+        from lumio.automation import normalize_points, scheduled_brightness
         pts = normalize_points([{"time": "08:00", "brightness": 70}, {"time": "23:00", "brightness": 20},
                                 {"time": "hatalı", "brightness": 5}])
         self.assertEqual(pts, [(480, 70), (1380, 20)])
@@ -367,7 +413,7 @@ class TestAutomation(unittest.TestCase):
 
     def test_schedule_engine_respects_manual_override(self):
         from datetime import datetime
-        from viewsonic_omni_tray.automation import ScheduleEngine
+        from lumio.automation import ScheduleEngine
         cfg = ConfigManager()
         cfg.schedule.update({"enabled": True, "transition_min": 0,
                              "points": [{"time": "08:00", "brightness": 70}, {"time": "20:00", "brightness": 30}]})
@@ -387,7 +433,7 @@ class TestAutomation(unittest.TestCase):
         self.assertFalse(engine.is_overridden)
 
     def test_app_rule_applies_and_restores(self):
-        from viewsonic_omni_tray.automation import AppRuleEngine, ScheduleEngine
+        from lumio.automation import AppRuleEngine, ScheduleEngine
         cfg = ConfigManager()
         cfg.app_rules.update({"enabled": True, "rules": [{"process": "Game", "mode": "Oyun"}]})
         cfg.schedule["enabled"] = False

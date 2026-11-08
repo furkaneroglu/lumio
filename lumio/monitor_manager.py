@@ -1,5 +1,5 @@
 """
-ViewSonic OMNI DDC/CI Tray - MonitorManager (Donanım Katmanı)
+Lumio - MonitorManager (Donanım Katmanı)
 Windows High-Level Monitor Configuration API (Dxva2) ve Low-Level VCP DDC/CI arayüzü.
 Parlaklık, Ses, Giriş Kaynağı ve Güç/Uyku kontrolünü yönetir.
 """
@@ -23,12 +23,97 @@ DDCCI_ERROR_MESSAGES = {
     1460: "I2C/DDC iletişim zaman aşımına uğradı (ERROR_TIMEOUT).",
 }
 
-# Giriş Kaynakları ve Kodları (ViewSonic OMNI VESA Standartları)
+# Giriş Kaynakları (VESA MCCS VCP 0x60 değerleri)
 INPUT_SOURCES = {
-    0x0F: "DisplayPort",
+    0x01: "VGA 1",
+    0x02: "VGA 2",
+    0x03: "DVI 1",
+    0x04: "DVI 2",
+    0x05: "Composite 1",
+    0x06: "Composite 2",
+    0x07: "S-Video 1",
+    0x08: "S-Video 2",
+    0x09: "Tuner 1",
+    0x0A: "Tuner 2",
+    0x0B: "Tuner 3",
+    0x0C: "Component 1",
+    0x0D: "Component 2",
+    0x0E: "Component 3",
+    0x0F: "DisplayPort 1",
+    0x10: "DisplayPort 2",
     0x11: "HDMI 1",
-    0x12: "HDMI 2"
+    0x12: "HDMI 2",
+    0x1B: "USB-C",
 }
+
+# Monitörler çoğu zaman fiziksel olarak bulunmayan eski analog girişleri de bildirir;
+# bunlar varsayılan olarak gizlenir (Ayarlar'dan açılabilir).
+LEGACY_INPUTS = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E}
+
+# Monitör yetenek listesi okunamazsa kullanılacak genel varsayılan
+DEFAULT_INPUTS = [0x0F, 0x11, 0x12]
+
+
+def input_name(code: int) -> str:
+    """Giriş kodunun okunabilir adını döner (bilinmeyen kodlar için 'Giriş 0xNN')."""
+    return INPUT_SOURCES.get(code, f"Giriş 0x{code:02X}")
+
+
+def input_short_name(code: int) -> str:
+    """Dar alanlar (sekmeler) için kısa giriş adı: 'DisplayPort 1' -> 'DP 1'."""
+    return input_name(code).replace("DisplayPort", "DP").replace("Composite", "Komp.").replace("Component", "Bileşen")
+
+
+def parse_vcp_capabilities(caps: str) -> Dict[int, List[int]]:
+    """
+    MCCS yetenek dizgisinin vcp(...) bölümünü ayrıştırır.
+    Örn: 'vcp(10 12 14(05 06) 60( 11 12 0F))' -> {0x10: [], 0x12: [], 0x14: [5, 6], 0x60: [0x11, 0x12, 0x0F]}
+    Boşluksuz yazımlara da dayanıklıdır (örn. '14(05 06)16 18').
+    """
+    result: Dict[int, List[int]] = {}
+    if not caps:
+        return result
+    lower = caps.lower()
+    start = -1
+    pos = 0
+    while True:
+        idx = lower.find("vcp(", pos)
+        if idx == -1:
+            break
+        # 'vcpname(' gibi başka anahtarlarla karışmasın: önceki karakter harf olmamalı
+        if idx == 0 or not lower[idx - 1].isalpha():
+            start = idx + 4
+            break
+        pos = idx + 4
+    if start == -1:
+        return result
+
+    depth = 0
+    token = ""
+    current: Optional[int] = None
+    i = start
+    while i < len(lower):
+        ch = lower[i]
+        if ch in "0123456789abcdef":
+            token += ch
+            if len(token) == 2:
+                value = int(token, 16)
+                token = ""
+                if depth == 0:
+                    current = value
+                    result.setdefault(value, [])
+                elif depth == 1 and current is not None:
+                    result[current].append(value)
+        else:
+            token = ""
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                if depth == 0:
+                    break  # vcp(...) bölümü bitti
+                depth -= 1
+        i += 1
+    return result
 
 # Güç Modları (VCP 0xD6)
 POWER_MODES = {
@@ -176,7 +261,9 @@ class MonitorDevice:
         current_mode: str = "Standart",
         capabilities_string: str = "",
         brand: str = "",
-        model: str = ""
+        model: str = "",
+        supports_volume: bool = True,
+        is_muted: bool = False
     ):
         self.index = index
         self.hmonitor = hmonitor
@@ -192,6 +279,9 @@ class MonitorDevice:
         self.current_color_preset = current_color_preset
         self.current_mode = current_mode
         self.capabilities_string = capabilities_string
+        self.supports_volume = supports_volume
+        self.is_muted = is_muted
+        self._vcp_caps: Optional[Dict[int, List[int]]] = None
 
     @property
     def short_name(self) -> str:
@@ -204,20 +294,38 @@ class MonitorDevice:
         return f"Ekran {self.index + 1}"
 
     @property
-    def is_viewsonic(self) -> bool:
-        desc_lower = self.description.lower()
-        brand_lower = (self.brand or "").lower()
-        return "viewsonic" in desc_lower or "vx2718" in desc_lower or "omni" in desc_lower or "vsc" in brand_lower or "viewsonic" in brand_lower
+    def vcp_caps(self) -> Dict[int, List[int]]:
+        if self._vcp_caps is None:
+            self._vcp_caps = parse_vcp_capabilities(self.capabilities_string)
+        return self._vcp_caps
+
+    def supports(self, vcp_code: int) -> bool:
+        """Monitör bu VCP özelliğini bildiriyor mu? Yetenek listesi okunamadıysa destekli varsayılır."""
+        caps = self.vcp_caps
+        return True if not caps else vcp_code in caps
 
     @property
-    def is_rampage(self) -> bool:
-        desc_lower = self.description.lower()
-        brand_lower = (self.brand or "").lower()
-        return "rampage" in desc_lower or "gl27" in desc_lower or "lhc" in brand_lower or "rampage" in brand_lower
+    def reported_inputs(self) -> List[int]:
+        """Monitörün bildirdiği giriş kaynakları (bildirim sırası korunur, tekrarlar atılır)."""
+        seen: List[int] = []
+        for code in self.vcp_caps.get(0x60, []):
+            if code not in seen:
+                seen.append(code)
+        if not seen:
+            seen = list(DEFAULT_INPUTS)
+        if self.current_input and self.current_input not in seen:
+            seen.append(self.current_input)
+        return sorted(seen)
+
+    @property
+    def default_visible_inputs(self) -> List[int]:
+        """Varsayılan olarak gösterilecek girişler: eski analog girişler hariç (etkin giriş her zaman dahil)."""
+        modern = [c for c in self.reported_inputs if c not in LEGACY_INPUTS or c == self.current_input]
+        return modern or self.reported_inputs
 
     @property
     def input_name(self) -> str:
-        return INPUT_SOURCES.get(self.current_input, f"Giriş (0x{self.current_input:02X})")
+        return input_name(self.current_input)
 
     @property
     def color_preset_name(self) -> str:
@@ -225,10 +333,7 @@ class MonitorDevice:
 
     @property
     def supports_luminance(self) -> bool:
-        if not self.capabilities_string:
-            return True
-        caps = self.capabilities_string.lower()
-        return "10" in caps or "luminance" in caps
+        return self.supports(0x10)
 
     def __repr__(self):
         return f"<MonitorDevice #{self.index}: '{self.description}' (%{self.current_brightness}, Kontrast: %{self.current_contrast}, Mod: {self.current_mode}, Ses: %{self.current_volume}, Giriş: {self.input_name})>"
@@ -402,7 +507,7 @@ class MonitorManager:
         """
         Windows Display Devices ve Registry EDID verilerini tarayarak
         monitörün gerçek üretici (brand) ve model (model) adını çözer.
-        Örn: 'Generic PnP Monitor' -> ('Rampage GL27R200Q', 'Rampage', 'GL27R200Q')
+        Örn: 'Generic PnP Monitor' -> ('Dell U2720Q', 'Dell', 'U2720Q')
         """
         brand = ""
         model = ""
@@ -520,14 +625,22 @@ class MonitorManager:
                             # Ses okuma (0x62)
                             pvct, cur_vol, mx_vol = wintypes.DWORD(), wintypes.DWORD(), wintypes.DWORD()
                             vol_val = 50
-                            if self.dxva2.GetVCPFeatureAndVCPFeatureReply(handle, 0x62, ctypes.byref(pvct), ctypes.byref(cur_vol), ctypes.byref(mx_vol)):
+                            vol_ok = bool(self.dxva2.GetVCPFeatureAndVCPFeatureReply(
+                                handle, 0x62, ctypes.byref(pvct), ctypes.byref(cur_vol), ctypes.byref(mx_vol)))
+                            if vol_ok:
                                 vol_val = cur_vol.value
+
+                            # Sessiz durumu (0x8D: 1 = sessiz, 2 = açık)
+                            cur_mute, mx_mute = wintypes.DWORD(), wintypes.DWORD()
+                            muted = False
+                            if self.dxva2.GetVCPFeatureAndVCPFeatureReply(handle, 0x8D, ctypes.byref(pvct), ctypes.byref(cur_mute), ctypes.byref(mx_mute)):
+                                muted = (cur_mute.value & 0xFF) == 1
 
                             # Giriş kaynağı okuma (0x60)
                             cur_inp, mx_inp = wintypes.DWORD(), wintypes.DWORD()
                             inp_val = 0x12
                             if self.dxva2.GetVCPFeatureAndVCPFeatureReply(handle, 0x60, ctypes.byref(pvct), ctypes.byref(cur_inp), ctypes.byref(mx_inp)):
-                                inp_val = cur_inp.value
+                                inp_val = cur_inp.value & 0xFF
 
                             # Kontrast okuma (0x12)
                             cur_cnt, mx_cnt = wintypes.DWORD(), wintypes.DWORD()
@@ -557,7 +670,9 @@ class MonitorManager:
                                 current_mode="Standart",
                                 capabilities_string=caps,
                                 brand=brand,
-                                model=model
+                                model=model,
+                                supports_volume=vol_ok or 0x62 in parse_vcp_capabilities(caps),
+                                is_muted=muted
                             )
                             devices.append(dev)
                         # İndeks, DDC/CI desteklemeyen monitörler için de artırılmalıdır;
@@ -644,7 +759,7 @@ class MonitorManager:
             if not self.dxva2.GetVCPFeatureAndVCPFeatureReply(handle, 0x60, ctypes.byref(pvct), ctypes.byref(cur_inp), ctypes.byref(mx)):
                 err = ctypes.GetLastError()
                 raise DDCCIDisconnectedError(f"Giriş kaynağı okunamadı: {self._format_win32_error(err)}", code=err)
-            return cur_inp.value
+            return cur_inp.value & 0xFF
 
         return self._execute_on_handle(target_index, _action)
 

@@ -1,5 +1,5 @@
 """
-ViewSonic OMNI DDC/CI Tray - System Tray Icon and Menu Manager (Tray UI)
+Lumio - System Tray Icon and Menu Manager (Tray UI)
 pystray ve Pillow kullanarak sistem tepsisi simgesi, bildirimler ve sağ tık menüsünü yönetir.
 Parlaklık, Ses, Giriş Kaynağı ve Uyku kontrollerini menüden sunar.
 """
@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw
 import pystray
 from .config import ConfigManager
 from .queue_worker import AsyncWriteQueueWorker, MonitorStatus
-from .monitor_manager import INPUT_SOURCES, DISPLAY_MODES
+from .monitor_manager import DISPLAY_MODES, input_name
 
 
 def create_tray_image(brightness: int = 50, status: MonitorStatus = MonitorStatus.CONNECTED) -> Image.Image:
@@ -82,9 +82,9 @@ class TrayApp:
             self.worker.status
         )
         self.icon = pystray.Icon(
-            name="ViewSonicOmniTray",
+            name="Lumio",
             icon=initial_img,
-            title="ViewSonic OMNI DDC/CI",
+            title="Lumio",
             menu=pystray.Menu(lambda: self._build_menu_items())
         )
         self._install_menu_refresh_hook()
@@ -134,7 +134,7 @@ class TrayApp:
         vol = self.worker.get_current_volume()
         cnt = self.worker.get_current_contrast()
         mode = self.worker.get_current_mode()
-        inp_name = INPUT_SOURCES.get(self.worker.get_current_input(), "HDMI")
+        inp_name = input_name(self.worker.get_current_input())
         title_text = f"Ekran Kontrol ({desc})\nMod: {mode} | P: %{brightness} | K: %{cnt} | S: %{vol} | Giriş: {inp_name} [{status_str}]"
 
         # Windows NOTIFYICONDATA.szTip en fazla 128 WCHAR (NUL dahil) alır;
@@ -242,9 +242,10 @@ class TrayApp:
             pystray.MenuItem("Sessiz (Mute / Unmute)", lambda icon, item: self.worker.toggle_mute()),
         ]
 
-        # 5. Giriş Kaynağı Seçimi (DisplayPort, HDMI 1, HDMI 2)
+        # 5. Giriş Kaynağı Seçimi (monitörün bildirdiği ve kullanıcının görünür bıraktığı girişler)
         input_items = []
-        for code, name in INPUT_SOURCES.items():
+        for code in self.worker.visible_inputs():
+            name = input_name(code)
             is_active = (code == cur_i)
             tag = f"● {name}" if is_active else name
             input_items.append(
@@ -280,7 +281,8 @@ class TrayApp:
             # Alt Menüler
             pystray.MenuItem("☀️ Parlaklık", pystray.Menu(*quick_brightness)),
             pystray.MenuItem("🌓 Kontrast", pystray.Menu(*quick_contrast)),
-            pystray.MenuItem("🔊 Monitör Sesi", pystray.Menu(*quick_volume)),
+            pystray.MenuItem("🔊 Monitör Sesi", pystray.Menu(*quick_volume),
+                             visible=self.worker.supports_volume),
             pystray.MenuItem("🔌 Giriş Kaynağı", pystray.Menu(*input_items)),
             pystray.MenuItem("📋 Profiller", pystray.Menu(*profile_items)),
             pystray.Menu.SEPARATOR,

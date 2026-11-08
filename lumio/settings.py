@@ -1,5 +1,5 @@
 """
-ViewSonic OMNI DDC/CI Tray - Settings Window
+Lumio - Settings Window
 Monitör seçimi, genel seçenekler, profiller ve klavye kısayolları için minimal ayar penceresi.
 """
 
@@ -10,11 +10,11 @@ from typing import Optional, Callable, Dict, Any, List
 
 from .config import ConfigManager
 from .queue_worker import AsyncWriteQueueWorker
-from .monitor_manager import DISPLAY_MODES
+from .monitor_manager import DISPLAY_MODES, input_short_name
 from .automation import parse_time, normalize_process_name, list_window_processes
 from .ui_kit import (
     Palette, Icons, get_theme, style_window, get_work_area,
-    Segmented, IconButton, Toggle, PillButton, Slider, styled_entry,
+    Segmented, IconButton, Toggle, PillButton, Slider, ChipGroup, styled_entry,
 )
 
 _HOTKEY_LABELS = [
@@ -50,6 +50,7 @@ class SettingsWindow:
         self.schedule_rows: List[Dict[str, Any]] = []
         self.rule_rows: List[Dict[str, Any]] = []
         self.calibration_sliders: Dict[str, Slider] = {}
+        self.input_chips: Dict[str, Any] = {}
 
     def show(self):
         if self._window is not None and self._window.winfo_exists():
@@ -108,7 +109,7 @@ class SettingsWindow:
 
         win = tk.Toplevel(self.root)
         win.withdraw()
-        win.title("Ayarlar - ViewSonic OMNI")
+        win.title("Ayarlar - Lumio")
         win.configure(bg=bg)
         win.resizable(False, True)
         win.bind("<Escape>", lambda e: win.destroy())
@@ -149,7 +150,11 @@ class SettingsWindow:
                                           font=t.font(9), fg=Palette.MUTED, bg=bg, anchor="w")
         self._refresh_monitor_options()
 
-        # 2. Genel
+        # 2. Giriş kaynakları (monitör başına görünür girişler)
+        if self.worker.devices:
+            self._build_inputs_section(content)
+
+        # 3. Genel
         self._heading(content, "Genel")
         self.osd_toggle = Toggle(self._row(content, "Ekran göstergesi",
                                            "Kısayol kullanıldığında ekranda küçük gösterge çıkar"),
@@ -173,17 +178,17 @@ class SettingsWindow:
         self.step_seg.set(int(self.config.step_size))
         self.step_seg.pack()
 
-        # 3. Otomatik parlaklık (saat planı)
+        # 4. Otomatik parlaklık (saat planı)
         self._build_schedule_section(content)
 
-        # 4. Uygulamaya göre mod
+        # 5. Uygulamaya göre mod
         self._build_rules_section(content)
 
-        # 5. Ekran eşitleme (yalnızca birden fazla monitörde)
+        # 6. Ekran eşitleme (yalnızca birden fazla monitörde)
         if len(self.worker.devices) > 1:
             self._build_calibration_section(content)
 
-        # 6. Profiller
+        # 7. Profiller
         self._heading(content, "Profiller", "Profil kısayollarıyla uygulanan parlaklık değerleri (%)")
         grid = tk.Frame(content, bg=bg)
         grid.pack(fill=tk.X, pady=(px(8), 0))
@@ -199,7 +204,7 @@ class SettingsWindow:
             entry.pack(side=tk.LEFT)
             self.profile_entries[name] = entry
 
-        # 7. Klavye kısayolları
+        # 8. Klavye kısayolları
         self._heading(content, "Klavye kısayolları", "Biçim: <ctrl>+<alt>+tuş  ·  boş bırakılırsa devre dışı")
         hk = tk.Frame(content, bg=bg)
         hk.pack(fill=tk.X, pady=(px(8), px(18)))
@@ -234,6 +239,22 @@ class SettingsWindow:
         style_window(win, rounded=False, dark_titlebar=True)
         win.lift()
         win.focus_force()
+
+    # --- Giriş Kaynakları ---
+    def _build_inputs_section(self, content: tk.Frame):
+        t, px, bg = self.t, self.t.px, Palette.BG
+        self._heading(content, "Giriş kaynakları",
+                      "Panelde ve menüde gösterilecek girişler. Monitörünüzde olmayan girişleri kapatın.")
+        self.input_chips = {}
+        for dev in self.worker.devices:
+            block = tk.Frame(content, bg=bg)
+            block.pack(fill=tk.X, pady=(px(8), 0))
+            tk.Label(block, text=dev.description, font=t.font(9), fg=Palette.TEXT, bg=bg,
+                     anchor="w").pack(fill=tk.X, pady=(0, px(4)))
+            chips = ChipGroup(block, t, [(c, input_short_name(c)) for c in dev.reported_inputs],
+                              selected=self.worker.device_visible_inputs(dev))
+            chips.pack(anchor="w")
+            self.input_chips[dev.description] = (dev, chips)
 
     # --- Otomatik Parlaklık ---
     def _build_schedule_section(self, content: tk.Frame):
@@ -468,6 +489,12 @@ class SettingsWindow:
                 seen.add(proc)
         self.config.app_rules["enabled"] = self.rules_toggle.get()
         self.config.app_rules["rules"] = rules
+
+        # Görünür giriş kaynakları (varsayılanla aynıysa saklanmaz; monitör değişirse varsayılan kullanılır)
+        for name, (dev, chips) in self.input_chips.items():
+            chosen = chips.get()
+            self.config.set_visible_inputs(
+                name, None if (not chosen or chosen == dev.default_visible_inputs) else chosen)
 
         # Ekran eşitleme
         for name, slider in self.calibration_sliders.items():

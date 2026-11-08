@@ -1,5 +1,5 @@
 """
-ViewSonic OMNI DDC/CI Tray - HotkeyService (Global Kısayol Dinleyicisi)
+Lumio - HotkeyService (Global Kısayol Dinleyicisi)
 pynput.keyboard.GlobalHotKeys kullanarak sistem genelinde klavye kısayollarını dinler.
 Parlaklık, Ses Seviyesi, Giriş Kaynağı ve Uyku modunu yönetir.
 """
@@ -181,8 +181,8 @@ class HotkeyService:
         self.worker.cycle_input_source()
         # Giriş değiştiğinde OSD göster
         inp = self.worker.get_current_input()
-        from .monitor_manager import INPUT_SOURCES
-        name = INPUT_SOURCES.get(inp, "DisplayPort / HDMI")
+        from .monitor_manager import input_name
+        name = input_name(inp)
         if self.on_hotkey_triggered:
             self.on_hotkey_triggered(name, 100, "input", False)
 

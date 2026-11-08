@@ -1,5 +1,5 @@
 """
-ViewSonic OMNI DDC/CI Tray Application Package
+Lumio - Marka bağımsız DDC/CI monitör yönetimi
 """
 
 from .config import ConfigManager
@@ -7,10 +7,10 @@ from .monitor_manager import MonitorManager, MonitorDevice, DDCCIError, DDCCIDis
 from .queue_worker import AsyncWriteQueueWorker, MonitorStatus
 from .notifications import NotificationEngine
 from .hotkeys import HotkeyService
-from .app import ViewSonicOmniApp
+from .app import LumioApp
 
 __all__ = [
-    "ViewSonicOmniApp",
+    "LumioApp",
     "MonitorManager",
     "MonitorDevice",
     "AsyncWriteQueueWorker",

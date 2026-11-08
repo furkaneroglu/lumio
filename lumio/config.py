@@ -1,5 +1,5 @@
 """
-ViewSonic OMNI DDC/CI Tray - ConfigManager (Profil ve Ayar Yönetimi)
+Lumio - ConfigManager (Profil ve Ayar Yönetimi)
 Kullanıcı tercihlerini JSON formatında saklar ve Windows başlangıç kaydını yönetir.
 """
 
@@ -7,15 +7,18 @@ import os
 import sys
 import json
 import copy
+import shutil
 import threading
 import winreg
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
-APP_NAME = "ViewSonicOmniTray"
+APP_NAME = "Lumio"
+# Önceki sürümlerin ayar klasörü / başlangıç kaydı adları (geçiş için)
+LEGACY_APP_NAMES = ["ViewSonicOmniTray"]
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 DEFAULT_CONFIG: Dict[str, Any] = {
-    "monitor_match": "ViewSonic",
+    "monitor_match": "",  # Boşsa ilk monitör; doluysa adında bu metni içeren monitör seçilir
     "step_size": 5,
     "profiles": {
         "Gündüz": 80,
@@ -70,6 +73,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     # "Tümü" modunda monitör başına parlaklık farkı (monitör adı -> -30..+30)
     "calibration": {},
+    # Monitör başına panelde gösterilecek giriş kaynakları (monitör adı -> [VCP 0x60 kodları])
+    "visible_inputs": {},
     # Son seçilen monitör ve monitör başına son ekran modu
     "last_state": {
         "monitor": "",
@@ -88,7 +93,24 @@ def get_config_dir() -> str:
     else:
         cfg_dir = os.path.dirname(os.path.abspath(__file__))
     os.makedirs(cfg_dir, exist_ok=True)
+    if appdata:
+        _migrate_legacy_config(appdata, cfg_dir)
     return cfg_dir
+
+
+def _migrate_legacy_config(appdata: str, cfg_dir: str):
+    """Yeni klasörde ayar yoksa eski sürümün (ViewSonicOmniTray) config.json dosyasını bir kez kopyalar."""
+    new_path = os.path.join(cfg_dir, "config.json")
+    if os.path.exists(new_path):
+        return
+    for legacy in LEGACY_APP_NAMES:
+        old_path = os.path.join(appdata, legacy, "config.json")
+        if os.path.exists(old_path):
+            try:
+                shutil.copy2(old_path, new_path)
+            except OSError as e:
+                print(f"[!] Eski ayarlar taşınamadı: {e}")
+            return
 
 
 def get_config_path() -> str:
@@ -162,6 +184,23 @@ class ConfigManager:
         except (TypeError, ValueError):
             return 0
 
+    def get_visible_inputs(self, monitor_name: str) -> Optional[List[int]]:
+        """Kullanıcının seçtiği görünür girişler; hiç seçilmediyse None (monitörün varsayılanı kullanılır)."""
+        value = self.data.setdefault("visible_inputs", {}).get(monitor_name)
+        if isinstance(value, list):
+            try:
+                return [int(v) for v in value]
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def set_visible_inputs(self, monitor_name: str, codes: Optional[List[int]]):
+        store = self.data.setdefault("visible_inputs", {})
+        if codes is None:
+            store.pop(monitor_name, None)
+        else:
+            store[monitor_name] = [int(c) for c in codes]
+
     @property
     def last_state(self) -> Dict[str, Any]:
         state = self.data.setdefault("last_state", {})
@@ -187,7 +226,7 @@ class ConfigManager:
     # Kolay erişim özellikleri
     @property
     def monitor_match(self) -> str:
-        return self.data.get("monitor_match", "ViewSonic")
+        return self.data.get("monitor_match", "") or ""
 
     @monitor_match.setter
     def monitor_match(self, val: str):
@@ -250,6 +289,11 @@ class ConfigManager:
         """Windows başlangıç kaydını günceller (EXE veya pythonw.exe ile arka planda sessiz çalışacak şekilde)."""
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+                for legacy in LEGACY_APP_NAMES:
+                    try:
+                        winreg.DeleteValue(key, legacy)
+                    except FileNotFoundError:
+                        pass
                 if enable:
                     if getattr(sys, "frozen", False):
                         # PyInstaller EXE olarak paketlendiyse doğrudan .exe yolunu kaydet

@@ -42,12 +42,12 @@ jobs:
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ViewSonic_OMNI_Brightness
-        path: ViewSonic_OMNI_Brightness.exe
+        name: Lumio
+        path: Lumio.exe
 
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v2
       with:
-        files: ViewSonic_OMNI_Brightness.exe
+        files: Lumio.exe
         generate_release_notes: true

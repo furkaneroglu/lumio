@@ -1,5 +1,5 @@
 """
-ViewSonic OMNI DDC/CI Tray - NotificationEngine (Bildirim & Hata Yönetimi)
+Lumio - NotificationEngine (Bildirim & Hata Yönetimi)
 Monitör bağlantı kopması, uyku modu ve hatalarda kullanıcıyı Windows bildirimleriyle uyarır.
 """
 

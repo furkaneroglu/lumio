@@ -1,5 +1,5 @@
 """
-ViewSonic OMNI DDC/CI Tray - AsyncWriteQueueWorker (Rate-Limiting & Asenkron Kuyruk)
+Lumio - AsyncWriteQueueWorker (Rate-Limiting & Asenkron Kuyruk)
 Donanım I2C yolunu tıkamamak için kuyruğa alma, debounce, throttling ve periyodik watchdog mimarisi.
 Parlaklık, Ses, Giriş Kaynağı ve Güç modunu asenkron olarak yönetir.
 """
@@ -8,7 +8,7 @@ import time
 import threading
 from enum import Enum
 from typing import List, Optional, Callable, Dict, Any
-from .monitor_manager import MonitorManager, MonitorDevice, INPUT_SOURCES, POWER_MODES, COLOR_PRESETS, DISPLAY_MODES, DDCCIError, DDCCIDisconnectedError
+from .monitor_manager import MonitorManager, MonitorDevice, DISPLAY_MODES, DEFAULT_INPUTS, input_name, DDCCIError, DDCCIDisconnectedError
 from .config import ConfigManager, ALL_MONITORS_KEY
 
 class MonitorStatus(Enum):
@@ -56,8 +56,7 @@ class AsyncWriteQueueWorker:
         self._is_muted: bool = False
 
         # Giriş Kaynağı Durumu (VCP 0x60)
-        self._current_input: int = 0x12 # Varsayılan HDMI 2
-        self.supported_inputs: List[int] = [0x0F, 0x11, 0x12] # DP, HDMI 1, HDMI 2
+        self._current_input: int = 0
 
         self._last_write_timestamp: float = 0.0
 
@@ -283,6 +282,7 @@ class AsyncWriteQueueWorker:
                 self._current_volume = target.current_volume
                 self._target_volume = target.current_volume
                 self._current_input = target.current_input
+                self._is_muted = target.is_muted
                 if sync_values:
                     b, c, v = sync_values
                     self._current_brightness = self._target_brightness = b
@@ -352,6 +352,7 @@ class AsyncWriteQueueWorker:
                         self._current_volume = d.current_volume
                         self._target_volume = d.current_volume
                         self._current_input = d.current_input
+                        self._is_muted = d.is_muted
                         self.status = MonitorStatus.CONNECTED
                         self.status_message = f"{d.description} seçildi."
                         selected_desc = d.description
@@ -548,6 +549,7 @@ class AsyncWriteQueueWorker:
             self._is_muted = not self._is_muted
             muted = self._is_muted
             target_idx = self.active_index
+            target_dev = self.active_device
             vol = self._target_volume
         self._notify_volume(vol, muted)
 
@@ -557,10 +559,13 @@ class AsyncWriteQueueWorker:
                     for d in list(self.devices):
                         try:
                             self.manager.set_mute(d.index, muted)
+                            d.is_muted = muted
                         except Exception as de:
                             print(f"[!] Mute hatası #{d.index}: {de}")
                 else:
                     self.manager.set_mute(target_idx, muted)
+                    if target_dev:
+                        target_dev.is_muted = muted
             except Exception as e:
                 print(f"[!] Mute hatası: {e}")
 
@@ -578,8 +583,7 @@ class AsyncWriteQueueWorker:
             target_idx = self.active_index
             target_dev = self.active_device
             self._current_input = source_code
-        input_name = INPUT_SOURCES.get(source_code, f"0x{source_code:02X}")
-        self._notify_input(source_code, input_name)
+        self._notify_input(source_code, input_name(source_code))
 
         def _bg_input():
             try:
@@ -601,14 +605,43 @@ class AsyncWriteQueueWorker:
 
     def cycle_input_source(self):
         """Giriş kaynakları arasında sırayla döner (DP -> HDMI 1 -> HDMI 2 -> DP)."""
+        inputs = self.visible_inputs()
         with self._lock:
             cur = self._current_input
-            try:
-                idx = self.supported_inputs.index(cur)
-                next_input = self.supported_inputs[(idx + 1) % len(self.supported_inputs)]
-            except ValueError:
-                next_input = self.supported_inputs[0]
+        try:
+            idx = inputs.index(cur)
+            next_input = inputs[(idx + 1) % len(inputs)]
+        except ValueError:
+            next_input = inputs[0]
         self.set_input_source(next_input)
+
+    def device_visible_inputs(self, dev: MonitorDevice) -> List[int]:
+        """Bir monitör için panelde gösterilecek girişler (kullanıcı seçimi veya monitörün varsayılanı)."""
+        chosen = self.config.get_visible_inputs(dev.description)
+        if chosen:
+            return [c for c in dev.reported_inputs if c in chosen] or dev.default_visible_inputs
+        return dev.default_visible_inputs
+
+    def visible_inputs(self) -> List[int]:
+        """Etkin seçim için gösterilecek girişler. Tümü modunda tüm monitörlerin ortak girişleri."""
+        with self._lock:
+            devices = list(self.devices)
+            active = self.active_device
+            sync = self.active_index == -1
+        if not devices:
+            return list(DEFAULT_INPUTS)
+        if not sync and active is not None:
+            return self.device_visible_inputs(active)
+        lists = [self.device_visible_inputs(d) for d in devices]
+        common = [c for c in lists[0] if all(c in other for other in lists[1:])]
+        return common or lists[0]
+
+    @property
+    def supports_volume(self) -> bool:
+        with self._lock:
+            if self.active_index == -1:
+                return any(d.supports_volume for d in self.devices)
+            return self.active_device.supports_volume if self.active_device else True
 
     # --- Güç / Uyku Yönetimi (VCP 0xD6) ---
     def sleep_monitor(self):

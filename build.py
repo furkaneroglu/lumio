@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ViewSonic OMNI DDC/CI Tray - Build Script
+Lumio - Build Script
 PyInstaller kullanarak bağımsız tek dosya (.exe) derler.
 """
 
@@ -17,13 +17,13 @@ if hasattr(sys.stdout, "reconfigure"):
         pass
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-MAIN_SCRIPT = os.path.join(ROOT_DIR, "viewsonic_omni_tray", "main.py")
-ICON_FILE = os.path.join(ROOT_DIR, "viewsonic_omni_tray", "app_icon.ico")
-EXE_NAME = "ViewSonic_OMNI_Brightness"
+MAIN_SCRIPT = os.path.join(ROOT_DIR, "lumio", "main.py")
+ICON_FILE = os.path.join(ROOT_DIR, "lumio", "app_icon.ico")
+EXE_NAME = "Lumio"
 
 def build():
     print("=" * 60)
-    print("[*] ViewSonic OMNI - EXE Derleme Başlatılıyor...")
+    print("[*] Lumio - EXE Derleme Başlatılıyor...")
     print("=" * 60)
 
     cmd = [

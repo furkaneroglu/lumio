@@ -1,5 +1,5 @@
 """
-ViewSonic OMNI DDC/CI Tray - On-Screen Display (OSD) Overlay
+Lumio - On-Screen Display (OSD) Overlay
 Kısayol kullanıldığında ekranın altında beliren, Windows 11 tarzı minimal gösterge.
 """
 
