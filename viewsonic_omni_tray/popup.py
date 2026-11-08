@@ -33,6 +33,7 @@ class SliderPopup:
         self.config = config
         self.worker = worker
         self.on_open_settings = on_open_settings
+        self.automation = None  # app tarafından atanır (AutomationService)
         self.t = get_theme(root)
 
         self.width = self.t.px(360)
@@ -236,8 +237,25 @@ class SliderPopup:
         status_text, status_color = _STATUS_STYLE.get(status, ("Bağlantı yok", Palette.DANGER))
         if status == MonitorStatus.CONNECTED and detail:
             status_text = f"{status_text}  ·  {detail}"
+        auto_hint = self._automation_hint()
+        if status == MonitorStatus.CONNECTED and auto_hint:
+            status_text = f"{status_text}  ·  {auto_hint}"
         self.status_dot.config(fg=status_color)
         self.status_lbl.config(text=status_text)
+
+    def _automation_hint(self) -> str:
+        auto = self.automation
+        if auto is None:
+            return ""
+        try:
+            proc = auto.app_rules.active_process
+            if proc:
+                return f"{proc.removesuffix('.exe')} için {self.worker.get_current_mode()}"
+            if auto.schedule.enabled:
+                return "Elle ayarlandı" if auto.schedule.is_overridden else "Otomatik"
+        except Exception:
+            pass
+        return ""
 
     # --- Göster / Gizle ---
     def toggle(self):

@@ -22,6 +22,11 @@ if hasattr(sys.stderr, "reconfigure"):
     except Exception:
         pass
 
+import tempfile
+
+# Testler kullanıcının gerçek ayar dosyasına (%APPDATA%) dokunmasın: geçici klasöre yönlendir
+os.environ["APPDATA"] = tempfile.mkdtemp(prefix="vs_omni_test_")
+
 repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if repo_dir not in sys.path:
     sys.path.insert(0, repo_dir)
@@ -171,8 +176,6 @@ class TestTrayImageRendering(unittest.TestCase):
         worker.manager = MagicMock()
         worker.manager.enumerate_monitors.return_value = []
         tray = TrayApp(cfg, worker, MagicMock(), MagicMock(), MagicMock())
-        menu = tray._build_menu()
-        self.assertIsNotNone(menu)
         items = tray._build_menu_items()
         self.assertGreater(len(items), 5)
 
@@ -322,6 +325,123 @@ class TestMultiMonitorAndSync(unittest.TestCase):
             self.assertEqual(dev1.current_brightness, 75)
         finally:
             worker.stop()
+
+
+class TestAutomation(unittest.TestCase):
+    """Otomatik parlaklık (saat planı), uygulama kuralları ve ekran eşitleme testleri"""
+
+    def tearDown(self):
+        # Testler birbirini etkilemesin: geçici ayar dosyasını sil (sonraki ConfigManager varsayılanla başlar)
+        from viewsonic_omni_tray.config import get_config_path
+        try:
+            os.remove(get_config_path())
+        except OSError:
+            pass
+
+    def _fake_worker(self, brightness=50, mode="Standart", contrast=70):
+        state = {"b": brightness, "m": mode, "c": contrast}
+        w = MagicMock()
+        w.get_current_brightness.side_effect = lambda: state["b"]
+        w.get_current_mode.side_effect = lambda: state["m"]
+        w.get_current_contrast.side_effect = lambda: state["c"]
+        w.set_brightness.side_effect = lambda v, immediate_ui=True: state.__setitem__("b", v)
+
+        def _apply(mode_name, brightness=None, contrast=None, wait_timeout=0.0):
+            from viewsonic_omni_tray.monitor_manager import DISPLAY_MODES
+            state["m"] = mode_name
+            state["b"] = brightness if brightness is not None else DISPLAY_MODES[mode_name]["brightness"]
+            state["c"] = contrast if contrast is not None else DISPLAY_MODES[mode_name]["contrast"]
+            return True
+        w.apply_display_mode.side_effect = _apply
+        return w, state
+
+    def test_schedule_interpolation_wraps_midnight(self):
+        from viewsonic_omni_tray.automation import normalize_points, scheduled_brightness
+        pts = normalize_points([{"time": "08:00", "brightness": 70}, {"time": "23:00", "brightness": 20},
+                                {"time": "hatalı", "brightness": 5}])
+        self.assertEqual(pts, [(480, 70), (1380, 20)])
+        self.assertEqual(scheduled_brightness(pts, 3 * 60, 30), 20)       # gece: dünden kalan değer
+        self.assertEqual(scheduled_brightness(pts, 8 * 60 + 15, 30), 45)  # geçişin ortası
+        self.assertEqual(scheduled_brightness(pts, 12 * 60, 30), 70)
+        self.assertEqual(scheduled_brightness(pts, 8 * 60, 0), 70)        # anında geçiş
+
+    def test_schedule_engine_respects_manual_override(self):
+        from datetime import datetime
+        from viewsonic_omni_tray.automation import ScheduleEngine
+        cfg = ConfigManager()
+        cfg.schedule.update({"enabled": True, "transition_min": 0,
+                             "points": [{"time": "08:00", "brightness": 70}, {"time": "20:00", "brightness": 30}]})
+        worker, state = self._fake_worker(brightness=50)
+        engine = ScheduleEngine(cfg, worker)
+
+        engine.tick(datetime(2026, 1, 1, 12, 0))
+        self.assertEqual(state["b"], 70)
+
+        state["b"] = 40  # kullanıcı elle değiştirdi
+        engine.tick(datetime(2026, 1, 1, 13, 0))
+        self.assertEqual(state["b"], 40)
+        self.assertTrue(engine.is_overridden)
+
+        engine.tick(datetime(2026, 1, 1, 20, 1))  # bir sonraki plan saati geldi
+        self.assertEqual(state["b"], 30)
+        self.assertFalse(engine.is_overridden)
+
+    def test_app_rule_applies_and_restores(self):
+        from viewsonic_omni_tray.automation import AppRuleEngine, ScheduleEngine
+        cfg = ConfigManager()
+        cfg.app_rules.update({"enabled": True, "rules": [{"process": "Game", "mode": "Oyun"}]})
+        cfg.schedule["enabled"] = False
+        worker, state = self._fake_worker(brightness=33, mode="Metin", contrast=44)
+        probe = MagicMock()
+        engine = AppRuleEngine(cfg, worker, ScheduleEngine(cfg, worker), probe=probe)
+
+        probe.foreground.return_value = (1234, "game.exe")
+        engine.tick()
+        self.assertEqual(state["m"], "Oyun")
+        self.assertEqual(engine.active_process, "game.exe")
+
+        probe.foreground.return_value = (os.getpid(), "python.exe")  # kendi penceremiz: değişiklik yok
+        engine.tick()
+        self.assertEqual(state["m"], "Oyun")
+
+        probe.foreground.return_value = (999, "notepad.exe")
+        engine.tick()
+        self.assertEqual((state["m"], state["b"], state["c"]), ("Metin", 33, 44))
+        self.assertIsNone(engine.active_process)
+
+    def test_sync_mode_applies_calibration_offsets(self):
+        cfg = ConfigManager()
+        cfg.calibration["Rampage GL27R200Q"] = -10
+        worker = AsyncWriteQueueWorker(cfg, MagicMock())
+        worker.debounce_sec = 0.01
+        worker.throttle_sec = 0.01
+        dev0 = MonitorDevice(0, 1, "ViewSonic VX2718-2KPC", 50)
+        dev1 = MonitorDevice(1, 2, "Rampage GL27R200Q", 40)
+        worker.devices = [dev0, dev1]
+        worker.select_device(-1)
+        self.assertEqual(worker.get_current_brightness(), 50)  # (50 + (40+10)) / 2
+
+        writes = {}
+        worker.manager.set_brightness.side_effect = lambda idx, val: writes.__setitem__(idx, val) or val
+        worker._worker_thread.start()
+        try:
+            worker.set_brightness(80, immediate_ui=False)
+            time.sleep(0.2)
+            self.assertEqual(writes, {0: 80, 1: 70})
+        finally:
+            worker.stop()
+
+    def test_last_selected_monitor_is_restored(self):
+        cfg = ConfigManager()
+        cfg.last_state["monitor"] = "Rampage GL27R200Q"
+        manager = MagicMock()
+        manager.enumerate_monitors.return_value = [
+            MonitorDevice(0, 1, "ViewSonic VX2718-2KPC", 50),
+            MonitorDevice(1, 2, "Rampage GL27R200Q", 40),
+        ]
+        worker = AsyncWriteQueueWorker(cfg, manager)
+        worker.rescan_monitors()
+        self.assertEqual(worker.active_index, 1)
 
 
 if __name__ == "__main__":

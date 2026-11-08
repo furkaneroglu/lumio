@@ -1,70 +1,23 @@
-# Byte-compiled / optimized / DLL files
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
+.venv/
+venv/
+.env
 
-# C extensions
-*.so
+# Test / araç önbellekleri
+.pytest_cache/
+.coverage
+htmlcov/
 
-# Distribution / packaging
+# PyInstaller derleme çıktıları
 build/
 dist/
-downloads/
+*.spec
 *.exe
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-*.manifest
-*.spec
 
-# PyInstaller
-*.manifest
-*.spec
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-cover/
-
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Editor / IDE directories
+# Editör / işletim sistemi
 .vscode/
 .idea/
-*.sublime-project
-*.sublime-workspace
-
-# Local User Data / Logs
-error.log
-config.json
-*.lnk
+Thumbs.db
+desktop.ini

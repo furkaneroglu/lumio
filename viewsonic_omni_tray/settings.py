@@ -6,13 +6,15 @@ Monitör seçimi, genel seçenekler, profiller ve klavye kısayolları için min
 import threading
 import tkinter as tk
 import tkinter.font as tkfont
-from typing import Optional, Callable, Dict, Any
+from typing import Optional, Callable, Dict, Any, List
 
 from .config import ConfigManager
 from .queue_worker import AsyncWriteQueueWorker
+from .monitor_manager import DISPLAY_MODES
+from .automation import parse_time, normalize_process_name, list_window_processes
 from .ui_kit import (
     Palette, Icons, get_theme, style_window, get_work_area,
-    Segmented, IconButton, Toggle, PillButton, styled_entry,
+    Segmented, IconButton, Toggle, PillButton, Slider, styled_entry,
 )
 
 _HOTKEY_LABELS = [
@@ -45,6 +47,9 @@ class SettingsWindow:
 
         self.profile_entries: Dict[str, tk.Entry] = {}
         self.hotkey_entries: Dict[str, tk.Entry] = {}
+        self.schedule_rows: List[Dict[str, Any]] = []
+        self.rule_rows: List[Dict[str, Any]] = []
+        self.calibration_sliders: Dict[str, Slider] = {}
 
     def show(self):
         if self._window is not None and self._window.winfo_exists():
@@ -168,7 +173,17 @@ class SettingsWindow:
         self.step_seg.set(int(self.config.step_size))
         self.step_seg.pack()
 
-        # 3. Profiller
+        # 3. Otomatik parlaklık (saat planı)
+        self._build_schedule_section(content)
+
+        # 4. Uygulamaya göre mod
+        self._build_rules_section(content)
+
+        # 5. Ekran eşitleme (yalnızca birden fazla monitörde)
+        if len(self.worker.devices) > 1:
+            self._build_calibration_section(content)
+
+        # 6. Profiller
         self._heading(content, "Profiller", "Profil kısayollarıyla uygulanan parlaklık değerleri (%)")
         grid = tk.Frame(content, bg=bg)
         grid.pack(fill=tk.X, pady=(px(8), 0))
@@ -184,7 +199,7 @@ class SettingsWindow:
             entry.pack(side=tk.LEFT)
             self.profile_entries[name] = entry
 
-        # 4. Klavye kısayolları
+        # 7. Klavye kısayolları
         self._heading(content, "Klavye kısayolları", "Biçim: <ctrl>+<alt>+tuş  ·  boş bırakılırsa devre dışı")
         hk = tk.Frame(content, bg=bg)
         hk.pack(fill=tk.X, pady=(px(8), px(18)))
@@ -219,6 +234,163 @@ class SettingsWindow:
         style_window(win, rounded=False, dark_titlebar=True)
         win.lift()
         win.focus_force()
+
+    # --- Otomatik Parlaklık ---
+    def _build_schedule_section(self, content: tk.Frame):
+        t, px, bg = self.t, self.t.px, Palette.BG
+        sched = self.config.schedule
+        right = self._heading(content, "Otomatik parlaklık",
+                              "Günün saatine göre parlaklığı ayarlar. Elle değiştirirseniz bir sonraki saate kadar karışmaz.")
+        self.schedule_toggle = Toggle(right, t, bool(sched.get("enabled")), bg=bg)
+        self.schedule_toggle.pack()
+
+        self.schedule_list = tk.Frame(content, bg=bg)
+        self.schedule_list.pack(fill=tk.X, pady=(px(6), 0))
+        self.schedule_rows = []
+        for point in sched.get("points", []) or []:
+            if isinstance(point, dict):
+                self._add_schedule_row(point.get("time", ""), point.get("brightness", 50))
+
+        actions = tk.Frame(content, bg=bg)
+        actions.pack(fill=tk.X, pady=(px(4), 0))
+        PillButton(actions, t, "+  Saat ekle", command=lambda: self._add_schedule_row("12:00", 50)).pack(side=tk.LEFT)
+
+        trans_right = self._row(content, "Geçiş süresi", "Parlaklık yeni değere bu sürede yavaşça geçer")
+        options = [(0, "Anında"), (15, "15 dk"), (30, "30 dk"), (60, "60 dk")]
+        try:
+            current = int(sched.get("transition_min", 30))
+        except (TypeError, ValueError):
+            current = 30
+        if current not in [k for k, _ in options]:
+            options.append((current, f"{current} dk"))
+        self.transition_seg = Segmented(trans_right, t, options, height=px(30), font_size=8)
+        self.transition_seg.configure(width=px(62) * len(options))
+        self.transition_seg.set(current)
+        self.transition_seg.pack()
+
+    def _add_schedule_row(self, time_text: str, brightness: Any):
+        t, px, bg = self.t, self.t.px, Palette.BG
+        row = tk.Frame(self.schedule_list, bg=bg)
+        row.pack(fill=tk.X, pady=px(3))
+        tk.Label(row, text=Icons.CLOCK, font=t.icon_font(10), fg=Palette.MUTED, bg=bg).pack(side=tk.LEFT)
+        time_entry = styled_entry(row, t, width=6, justify="center")
+        time_entry.insert(0, str(time_text))
+        time_entry.pack(side=tk.LEFT, padx=(px(8), px(8)))
+        tk.Label(row, text="saatinden itibaren parlaklık", font=t.font(9), fg=Palette.MUTED, bg=bg).pack(side=tk.LEFT)
+        value_entry = styled_entry(row, t, width=4, justify="center")
+        value_entry.insert(0, str(brightness))
+        value_entry.pack(side=tk.LEFT, padx=(px(8), px(4)))
+        tk.Label(row, text="%", font=t.font(9), fg=Palette.MUTED, bg=bg).pack(side=tk.LEFT)
+
+        entry = {"frame": row, "time": time_entry, "value": value_entry}
+        IconButton(row, t, Icons.CLOSE, icon_size=9, size=px(28),
+                   command=lambda: self._remove_row(self.schedule_rows, entry)).pack(side=tk.RIGHT)
+        self.schedule_rows.append(entry)
+
+    # --- Uygulamaya Göre Mod ---
+    def _build_rules_section(self, content: tk.Frame):
+        t, px, bg = self.t, self.t.px, Palette.BG
+        rules_cfg = self.config.app_rules
+        right = self._heading(content, "Uygulamaya göre mod",
+                              "Seçtiğiniz uygulama öndeyken ekran modu değişir; çıkınca önceki ayarlar geri gelir.")
+        self.rules_toggle = Toggle(right, t, bool(rules_cfg.get("enabled")), bg=bg)
+        self.rules_toggle.pack()
+
+        self.rules_list = tk.Frame(content, bg=bg)
+        self.rules_list.pack(fill=tk.X, pady=(px(6), 0))
+        self.rules_empty_lbl = tk.Label(self.rules_list, text="Henüz kural yok. Örneğin bir oyunu Oyun moduna bağlayın.",
+                                        font=t.font(9), fg=Palette.FAINT, bg=bg, anchor="w")
+        self.rule_rows = []
+        for rule in rules_cfg.get("rules", []) or []:
+            if isinstance(rule, dict):
+                self._add_rule_row(rule.get("process", ""), rule.get("mode", "Oyun"))
+        self._update_rules_empty()
+
+        actions = tk.Frame(content, bg=bg)
+        actions.pack(fill=tk.X, pady=(px(4), 0))
+        self.pick_app_btn = PillButton(actions, t, "+  Açık uygulamadan seç", command=self._show_app_picker)
+        self.pick_app_btn.pack(side=tk.LEFT)
+        PillButton(actions, t, "Elle ekle", command=lambda: self._add_rule_row("", "Oyun", focus=True)).pack(
+            side=tk.LEFT, padx=(px(8), 0))
+
+    def _add_rule_row(self, process: str, mode: str, focus: bool = False):
+        t, px, bg = self.t, self.t.px, Palette.BG
+        row = tk.Frame(self.rules_list, bg=bg)
+        row.pack(fill=tk.X, pady=px(3))
+        proc_entry = styled_entry(row, t, width=18)
+        proc_entry.insert(0, process)
+        proc_entry.pack(side=tk.LEFT)
+        mode_seg = Segmented(row, t, [(k, k) for k in DISPLAY_MODES], height=px(30), font_size=8)
+        mode_seg.configure(width=px(300))
+        mode_seg.set(mode if mode in DISPLAY_MODES else "Oyun")
+        mode_seg.pack(side=tk.LEFT, padx=(px(8), 0))
+
+        entry = {"frame": row, "process": proc_entry, "mode": mode_seg}
+        IconButton(row, t, Icons.CLOSE, icon_size=9, size=px(28),
+                   command=lambda: self._remove_row(self.rule_rows, entry)).pack(side=tk.RIGHT)
+        self.rule_rows.append(entry)
+        self._update_rules_empty()
+        if focus:
+            proc_entry.focus_set()
+
+    def _update_rules_empty(self):
+        if self.rule_rows:
+            self.rules_empty_lbl.pack_forget()
+        else:
+            self.rules_empty_lbl.pack(fill=tk.X, pady=self.t.px(4))
+
+    def _show_app_picker(self):
+        """Açık pencereleri olan uygulamaları açılır menüde listeler."""
+        try:
+            apps = list_window_processes()
+        except Exception as e:
+            print(f"[!] Uygulama listesi alınamadı: {e}")
+            apps = []
+        existing = {normalize_process_name(r["process"].get()) for r in self.rule_rows}
+        menu = tk.Menu(self._window, tearoff=False, bg=Palette.SURFACE, fg=Palette.TEXT,
+                       activebackground=Palette.SELECTED, activeforeground=Palette.TEXT,
+                       disabledforeground=Palette.FAINT, bd=0, font=self.t.font(9))
+        added = 0
+        for proc, _title in apps:
+            if proc in existing:
+                continue
+            menu.add_command(label=proc, command=lambda p=proc: self._add_rule_row(p, "Oyun"))
+            added += 1
+        if not added:
+            menu.add_command(label="Eklenebilecek açık uygulama bulunamadı", state=tk.DISABLED)
+        btn = self.pick_app_btn
+        try:
+            menu.tk_popup(btn.winfo_rootx(), btn.winfo_rooty() + btn.winfo_height() + self.t.px(4))
+        finally:
+            menu.grab_release()
+
+    # --- Ekran Eşitleme ---
+    def _build_calibration_section(self, content: tk.Frame):
+        t, px, bg = self.t, self.t.px, Palette.BG
+        self._heading(content, "Ekran eşitleme",
+                      "\"Tümü\" seçiliyken bir ekran daha parlak görünüyorsa farkı buradan düzeltin.")
+        self.calibration_sliders = {}
+        for dev in self.worker.devices:
+            right = self._row(content, dev.description)
+            value_lbl = tk.Label(right, text="", width=4, anchor="e", font=t.font(10), fg=Palette.TEXT, bg=bg)
+
+            def _fmt(v: int, lbl=value_lbl):
+                lbl.config(text=f"{v:+d}" if v else "0")
+
+            slider = Slider(right, t, value=self.config.get_calibration(dev.description), from_=-30, to=30,
+                            command=_fmt, origin=0)
+            slider.configure(width=px(200))
+            slider.pack(side=tk.LEFT)
+            value_lbl.pack(side=tk.LEFT, padx=(px(6), 0))
+            _fmt(slider.get())
+            self.calibration_sliders[dev.description] = slider
+
+    def _remove_row(self, rows: List[Dict[str, Any]], entry: Dict[str, Any]):
+        if entry in rows:
+            rows.remove(entry)
+        entry["frame"].destroy()
+        if rows is self.rule_rows:
+            self._update_rules_empty()
 
     # --- Monitör Listesi ---
     def _refresh_monitor_options(self):
@@ -266,6 +438,44 @@ class SettingsWindow:
         step = self.step_seg.get()
         if step is not None:
             self.config.step_size = int(step)
+
+        # Otomatik parlaklık
+        points = []
+        for row in self.schedule_rows:
+            minute = parse_time(row["time"].get())
+            try:
+                value = max(0, min(100, int(row["value"].get())))
+            except ValueError:
+                continue
+            if minute is not None:
+                points.append({"time": f"{minute // 60:02d}:{minute % 60:02d}", "brightness": value})
+        points.sort(key=lambda p: p["time"])
+        sched = self.config.schedule
+        sched["enabled"] = self.schedule_toggle.get()
+        sched["points"] = points
+        transition = self.transition_seg.get()
+        if transition is not None:
+            sched["transition_min"] = int(transition)
+
+        # Uygulama kuralları
+        rules = []
+        seen = set()
+        for row in self.rule_rows:
+            proc = normalize_process_name(row["process"].get())
+            mode = row["mode"].get()
+            if proc and proc not in seen and mode in DISPLAY_MODES:
+                rules.append({"process": proc, "mode": mode})
+                seen.add(proc)
+        self.config.app_rules["enabled"] = self.rules_toggle.get()
+        self.config.app_rules["rules"] = rules
+
+        # Ekran eşitleme
+        for name, slider in self.calibration_sliders.items():
+            value = int(slider.get())
+            if value:
+                self.config.calibration[name] = value
+            else:
+                self.config.calibration.pop(name, None)
 
         self.config.show_osd = self.osd_toggle.get()
         self.config.show_notifications = self.notif_toggle.get()

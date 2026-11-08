@@ -7,15 +7,15 @@ import os
 import sys
 import json
 import copy
+import threading
 import winreg
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 APP_NAME = "ViewSonicOmniTray"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "monitor_match": "ViewSonic",
-    "selected_index": 0,
     "step_size": 5,
     "profiles": {
         "Gündüz": 80,
@@ -52,8 +52,32 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "osd_duration_ms": 1400, # HUD ekranda kalma süresi
         "show_notifications": False # Windows bildirimlerini göster (varsayılan: kapalı)
     },
-    "run_on_startup": False
+    "run_on_startup": False,
+    # Saate göre otomatik parlaklık: her nokta o saatten itibaren geçerli hedef parlaklıktır
+    "schedule": {
+        "enabled": False,
+        "transition_min": 30,
+        "points": [
+            {"time": "08:00", "brightness": 70},
+            {"time": "19:00", "brightness": 45},
+            {"time": "23:00", "brightness": 25}
+        ]
+    },
+    # Ön plandaki uygulamaya göre otomatik ekran modu (örn. {"process": "vlc.exe", "mode": "Film"})
+    "app_rules": {
+        "enabled": False,
+        "rules": []
+    },
+    # "Tümü" modunda monitör başına parlaklık farkı (monitör adı -> -30..+30)
+    "calibration": {},
+    # Son seçilen monitör ve monitör başına son ekran modu
+    "last_state": {
+        "monitor": "",
+        "modes": {}
+    }
 }
+
+ALL_MONITORS_KEY = "__all__"
 
 
 def get_config_dir() -> str:
@@ -77,6 +101,7 @@ class ConfigManager:
     def __init__(self):
         self.path = get_config_path()
         self.data: Dict[str, Any] = {}
+        self._save_lock = threading.Lock()
         self.load()
 
     def load(self):
@@ -104,12 +129,60 @@ class ConfigManager:
         return result
 
     def save(self):
-        """Yapılandırmayı JSON dosyasına yazar."""
+        """Yapılandırmayı JSON dosyasına yazar (önce geçici dosyaya; yarım yazılmış dosya oluşmaz)."""
+        with self._save_lock:
+            tmp_path = self.path + ".tmp"
+            try:
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(self.data, f, ensure_ascii=False, indent=2)
+                os.replace(tmp_path, self.path)
+            except Exception as e:
+                print(f"[!] Ayar kaydedilemedi: {e}")
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+    # --- Otomasyon ve Durum Ayarları ---
+    @property
+    def schedule(self) -> Dict[str, Any]:
+        return self.data.setdefault("schedule", copy.deepcopy(DEFAULT_CONFIG["schedule"]))
+
+    @property
+    def app_rules(self) -> Dict[str, Any]:
+        return self.data.setdefault("app_rules", copy.deepcopy(DEFAULT_CONFIG["app_rules"]))
+
+    @property
+    def calibration(self) -> Dict[str, int]:
+        return self.data.setdefault("calibration", {})
+
+    def get_calibration(self, monitor_name: str) -> int:
         try:
-            with open(self.path, "w", encoding="utf-8") as f:
-                json.dump(self.data, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"[!] Ayar kaydedilemedi: {e}")
+            return max(-30, min(30, int(self.calibration.get(monitor_name, 0))))
+        except (TypeError, ValueError):
+            return 0
+
+    @property
+    def last_state(self) -> Dict[str, Any]:
+        state = self.data.setdefault("last_state", {})
+        state.setdefault("monitor", "")
+        state.setdefault("modes", {})
+        return state
+
+    def remember_monitor(self, monitor_name: str):
+        if isinstance(monitor_name, str) and self.last_state.get("monitor") != monitor_name:
+            self.last_state["monitor"] = monitor_name
+            self.save()
+
+    def remember_mode(self, monitor_names: List[str], mode_name: str):
+        modes = self.last_state["modes"]
+        changed = False
+        for name in monitor_names:
+            if isinstance(name, str) and modes.get(name) != mode_name:
+                modes[name] = mode_name
+                changed = True
+        if changed:
+            self.save()
 
     # Kolay erişim özellikleri
     @property
@@ -199,13 +272,10 @@ class ConfigManager:
             print(f"[!] Windows başlangıç kaydı güncellenemedi: {e}")
 
 
-# Geriye dönük uyumluluk takma adı
-AppConfig = ConfigManager
-
 __all__ = [
     "ConfigManager",
-    "AppConfig",
     "DEFAULT_CONFIG",
+    "ALL_MONITORS_KEY",
     "get_config_path",
     "get_config_dir"
 ]

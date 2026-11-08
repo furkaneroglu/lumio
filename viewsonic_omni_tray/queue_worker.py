@@ -9,7 +9,7 @@ import threading
 from enum import Enum
 from typing import List, Optional, Callable, Dict, Any
 from .monitor_manager import MonitorManager, MonitorDevice, INPUT_SOURCES, POWER_MODES, COLOR_PRESETS, DISPLAY_MODES, DDCCIError, DDCCIDisconnectedError
-from .config import ConfigManager
+from .config import ConfigManager, ALL_MONITORS_KEY
 
 class MonitorStatus(Enum):
     CONNECTED = "Bağlı"
@@ -175,6 +175,21 @@ class AsyncWriteQueueWorker:
             except Exception as e:
                 print(f"[!] Notification callback error: {e}")
 
+    # --- Ekran Eşitleme (Tümü modunda monitör başına parlaklık farkı) ---
+    def _offset(self, dev: MonitorDevice) -> int:
+        return self.config.get_calibration(dev.description)
+
+    def _device_brightness(self, dev: MonitorDevice, base: int) -> int:
+        return max(0, min(100, int(base) + self._offset(dev)))
+
+    def _sync_base_values(self, devs: List[MonitorDevice]):
+        """Tümü modunda gösterilecek ortak değerleri (eşitleme farkı çıkarılmış ortalama) hesaplar."""
+        n = len(devs)
+        b = int(round(sum(d.current_brightness - self._offset(d) for d in devs) / n))
+        c = int(round(sum(d.current_contrast for d in devs) / n))
+        v = int(round(sum(d.current_volume for d in devs) / n))
+        return max(0, min(100, b)), c, v
+
     # --- Monitör Tarama & Seçim ---
     @property
     def active_monitor_name(self) -> str:
@@ -196,8 +211,20 @@ class AsyncWriteQueueWorker:
             self._notify_status(status, msg)
             return False
 
+        remembered_modes = self.config.last_state.get("modes", {})
+        remembered_monitor = self.config.last_state.get("monitor", "")
+        for d in devs:
+            mode = remembered_modes.get(d.description)
+            if mode in DISPLAY_MODES:
+                d.current_mode = mode
+
         with self._lock:
             self.devices = devs
+
+            # İlk taramada en son seçilen monitörü / Tümü modunu geri yükle
+            if devs and not self._user_selected and remembered_monitor == ALL_MONITORS_KEY and len(devs) > 1:
+                self.active_index = -1
+                self._user_selected = True
 
             if not devs:
                 old_status = self.status
@@ -211,16 +238,24 @@ class AsyncWriteQueueWorker:
             else:
                 prev_status = self.status
 
+                sync_values = None
                 if self.active_index == -1:
                     # Senkron / Tüm ekranlar modunu koru
                     self.active_device = None
                     target = devs[0]
+                    sync_values = self._sync_base_values(devs)
                     self.status_message = "Tüm Ekranlar (Senkron Kontrol) bağlandı."
                 else:
                     target = None
                     if self._user_selected:
                         for d in devs:
                             if d.index == self.active_index:
+                                target = d
+                                break
+
+                    if not target and remembered_monitor:
+                        for d in devs:
+                            if d.description == remembered_monitor:
                                 target = d
                                 break
 
@@ -248,6 +283,11 @@ class AsyncWriteQueueWorker:
                 self._current_volume = target.current_volume
                 self._target_volume = target.current_volume
                 self._current_input = target.current_input
+                if sync_values:
+                    b, c, v = sync_values
+                    self._current_brightness = self._target_brightness = b
+                    self._current_contrast = self._target_contrast = c
+                    self._current_volume = self._target_volume = v
                 self.status = MonitorStatus.CONNECTED
                 status = self.status
                 msg = self.status_message
@@ -277,15 +317,14 @@ class AsyncWriteQueueWorker:
 
     def select_device(self, index: int):
         selected_desc = ""
+        remember_key = ""
         with self._lock:
             if index == -1:
                 self._user_selected = True
                 self.active_index = -1
                 self.active_device = None
                 if self.devices:
-                    avg_b = int(sum(d.current_brightness for d in self.devices) / len(self.devices))
-                    avg_c = int(sum(d.current_contrast for d in self.devices) / len(self.devices))
-                    avg_v = int(sum(d.current_volume for d in self.devices) / len(self.devices))
+                    avg_b, avg_c, avg_v = self._sync_base_values(self.devices)
                     self._current_brightness = avg_b
                     self._target_brightness = avg_b
                     self._current_contrast = avg_c
@@ -297,6 +336,7 @@ class AsyncWriteQueueWorker:
                 self.status = MonitorStatus.CONNECTED
                 self.status_message = "Tüm Ekranlar (Senkron Kontrol) seçildi."
                 selected_desc = "Tüm Ekranlar (Senkron)"
+                remember_key = ALL_MONITORS_KEY
             else:
                 for d in self.devices:
                     if d.index == index:
@@ -315,7 +355,11 @@ class AsyncWriteQueueWorker:
                         self.status = MonitorStatus.CONNECTED
                         self.status_message = f"{d.description} seçildi."
                         selected_desc = d.description
+                        remember_key = d.description
                         break
+
+        if remember_key:
+            self.config.remember_monitor(remember_key)
 
         if selected_desc:
             input_name = self.active_device.input_name if self.active_device else "HDMI / DP"
@@ -378,10 +422,12 @@ class AsyncWriteQueueWorker:
         with self._lock:
             return self._current_mode
 
-    def apply_display_mode(self, mode_name: str) -> bool:
+    def apply_display_mode(self, mode_name: str, brightness: Optional[int] = None,
+                           contrast: Optional[int] = None, wait_timeout: float = 0.0) -> bool:
         """
         Ekran modunu (Oyun, Film, Metin, Standart, Gece) uygular.
         Monitörün Parlaklık, Kontrast ve Renk Sıcaklığı donanım ayarlarını anında koordine eder.
+        brightness / contrast verilirse modun varsayılanları yerine kullanılır (önceki duruma dönüş).
         """
         if mode_name not in DISPLAY_MODES:
             return False
@@ -390,8 +436,8 @@ class AsyncWriteQueueWorker:
         with self._lock:
             self._current_mode = mode_name
             target_idx = self.active_index
-            target_b = mode_data["brightness"]
-            target_c = mode_data["contrast"]
+            target_b = max(0, min(100, int(brightness))) if brightness is not None else mode_data["brightness"]
+            target_c = max(0, min(100, int(contrast))) if contrast is not None else mode_data["contrast"]
             target_cp = mode_data["color_preset"]
             target_dev = self.active_device
 
@@ -410,14 +456,15 @@ class AsyncWriteQueueWorker:
                 if target_idx == -1:
                     for d in list(self.devices):
                         try:
-                            self.manager.apply_display_mode(d.index, mode_name)
+                            dev_b = self._device_brightness(d, target_b)
+                            self.manager.apply_display_mode(d.index, mode_name, brightness=dev_b, contrast=target_c)
                             d.current_mode = mode_name
-                            d.current_brightness = target_b
+                            d.current_brightness = dev_b
                             d.current_contrast = target_c
                         except Exception as de:
                             print(f"[!] Display mode error on #{d.index}: {de}")
                 else:
-                    self.manager.apply_display_mode(target_idx, mode_name)
+                    self.manager.apply_display_mode(target_idx, mode_name, brightness=target_b, contrast=target_c)
                     if target_dev:
                         target_dev.current_mode = mode_name
                         target_dev.current_brightness = target_b
@@ -425,7 +472,17 @@ class AsyncWriteQueueWorker:
             except Exception as e:
                 print(f"[!] Ekran modu uygulama hatası: {e}")
 
-        threading.Thread(target=_bg_apply, daemon=True, name="DDC-ApplyMode").start()
+        apply_thread = threading.Thread(target=_bg_apply, daemon=True, name="DDC-ApplyMode")
+        apply_thread.start()
+        if wait_timeout > 0:
+            apply_thread.join(wait_timeout)
+
+        if target_idx == -1:
+            names = [d.description for d in self.devices]
+        else:
+            names = [target_dev.description] if target_dev else []
+        if names:
+            self.config.remember_mode(names, mode_name)
         return True
 
     def cycle_display_mode(self) -> str:
@@ -653,7 +710,8 @@ class AsyncWriteQueueWorker:
                     for dev in list(self.devices):
                         try:
                             if need_b:
-                                vb = self.manager.set_brightness(dev.index, target_b)
+                                vb = self._device_brightness(dev, target_b)
+                                self.manager.set_brightness(dev.index, vb)
                                 dev.current_brightness = vb
                             if need_c:
                                 vc = self.manager.set_contrast(dev.index, target_c)

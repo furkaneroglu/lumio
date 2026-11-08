@@ -704,10 +704,13 @@ class MonitorManager:
         return self._execute_on_handle(target_index, _action)
 
     # --- Ekran Modları (ViewMode Presets) ---
-    def apply_display_mode(self, target_index: int, mode_name: str) -> dict:
+    def apply_display_mode(self, target_index: int, mode_name: str,
+                           brightness: Optional[int] = None, contrast: Optional[int] = None) -> dict:
         """
         Belirtilen ekran modunu (Oyun, Film, Metin, Standart, Gece) donanım üzerinde uygular.
         Parlaklık (0x10), Kontrast (0x12) ve Renk Ön Ayarını (0x14) koordine eder.
+        brightness / contrast verilirse modun varsayılan değerleri yerine bunlar yazılır
+        (ekran eşitleme farkı veya önceki duruma geri dönüş için).
         """
         if mode_name not in DISPLAY_MODES:
             raise ValueError(f"Bilinmeyen ekran modu: {mode_name}. Geçerli modlar: {list(DISPLAY_MODES.keys())}")
@@ -721,13 +724,15 @@ class MonitorManager:
                 self.dxva2.SetVCPFeature(handle, 0x14, wintypes.DWORD(cp))
 
             # 2. Kontrast (0x12)
-            cnt = mode_data.get("contrast")
+            cnt = contrast if contrast is not None else mode_data.get("contrast")
             if cnt is not None:
+                cnt = max(0, min(100, int(cnt)))
                 self.dxva2.SetVCPFeature(handle, 0x12, wintypes.DWORD(cnt))
 
             # 3. Parlaklık (0x10)
-            br = mode_data.get("brightness")
+            br = brightness if brightness is not None else mode_data.get("brightness")
             if br is not None:
+                br = max(0, min(100, int(br)))
                 self.dxva2.SetMonitorBrightness(handle, wintypes.DWORD(br))
 
             return mode_data

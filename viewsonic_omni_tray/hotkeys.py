@@ -197,7 +197,4 @@ class HotkeyService:
             self.on_hotkey_triggered("Uyku Modu", 0, "sleep", False)
 
 
-# Geriye dönük takma ad
-HotkeyManager = HotkeyService
-
-__all__ = ["HotkeyService", "HotkeyManager"]
+__all__ = ["HotkeyService"]

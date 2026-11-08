@@ -64,16 +64,17 @@ class TrayApp:
         worker: AsyncWriteQueueWorker,
         on_open_popup: Callable[[], None],
         on_open_settings: Callable[[], None],
-        on_exit: Callable[[], None]
+        on_exit: Callable[[], None],
+        on_automation_changed: Optional[Callable[[], None]] = None
     ):
         self.config = config
         self.worker = worker
         self.on_open_popup = on_open_popup
         self.on_open_settings = on_open_settings
         self.on_exit = on_exit
+        self.on_automation_changed = on_automation_changed
 
         self.icon: Optional[pystray.Icon] = None
-        self._lock = threading.Lock()
 
     def start(self):
         initial_img = create_tray_image(
@@ -149,9 +150,6 @@ class TrayApp:
             self.icon.title = title_text
         except Exception as e:
             print(f"[!] Tray title update error: {e}")
-
-    def _build_menu(self) -> pystray.Menu:
-        return pystray.Menu(lambda: self._build_menu_items())
 
     def _build_menu_items(self):
         cur_b = self.worker.get_current_brightness()
@@ -288,6 +286,19 @@ class TrayApp:
             pystray.Menu.SEPARATOR,
 
             # Uyku Modu ve Tarama
+            # Otomasyon
+            pystray.MenuItem(
+                "🕒 Saate göre otomatik parlaklık",
+                lambda icon, item: self._toggle_feature("schedule"),
+                checked=lambda item: bool(self.config.schedule.get("enabled"))
+            ),
+            pystray.MenuItem(
+                "🎮 Uygulamaya göre otomatik mod",
+                lambda icon, item: self._toggle_feature("app_rules"),
+                checked=lambda item: bool(self.config.app_rules.get("enabled"))
+            ),
+            pystray.Menu.SEPARATOR,
+
             pystray.MenuItem("🌙 Monitörü Uyku Moduna Al", lambda icon, item: self.worker.sleep_monitor()),
             pystray.MenuItem("🔄 Monitörü Yeniden Tara / Doğrula", lambda icon, item: self._on_rescan_clicked()),
 
@@ -298,6 +309,13 @@ class TrayApp:
         ]
 
         return menu_items
+
+    def _toggle_feature(self, key: str):
+        section = self.config.schedule if key == "schedule" else self.config.app_rules
+        section["enabled"] = not bool(section.get("enabled"))
+        self.config.save()
+        if self.on_automation_changed:
+            self.on_automation_changed()
 
     def _on_rescan_clicked(self):
         threading.Thread(target=self.worker.rescan_monitors, daemon=True).start()

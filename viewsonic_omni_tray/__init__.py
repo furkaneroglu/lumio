@@ -2,7 +2,7 @@
 ViewSonic OMNI DDC/CI Tray Application Package
 """
 
-from .config import ConfigManager, AppConfig
+from .config import ConfigManager
 from .monitor_manager import MonitorManager, MonitorDevice, DDCCIError, DDCCIDisconnectedError
 from .queue_worker import AsyncWriteQueueWorker, MonitorStatus
 from .notifications import NotificationEngine
@@ -16,7 +16,6 @@ __all__ = [
     "AsyncWriteQueueWorker",
     "MonitorStatus",
     "ConfigManager",
-    "AppConfig",
     "NotificationEngine",
     "HotkeyService"
 ]

@@ -19,6 +19,7 @@ from .popup import SliderPopup
 from .settings import SettingsWindow
 from .hotkeys import HotkeyService
 from .tray import TrayApp
+from .automation import AutomationService
 
 MUTEX_NAME = "Global\\ViewSonicOmniTray_SingleInstance_Mutex_App"
 
@@ -96,22 +97,28 @@ class ViewSonicOmniApp:
             on_hotkey_triggered=self._on_hotkey_triggered
         )
 
-        # 5. Sistem Tepsisi
+        # 5. Otomasyon (saate göre parlaklık, uygulamaya göre mod)
+        self.automation = AutomationService(self.config, self.worker)
+
+        self.popup.automation = self.automation
+
+        # 6. Sistem Tepsisi
         self.tray = TrayApp(
             self.config,
             self.worker,
             on_open_popup=self._safe_open_popup,
             on_open_settings=self._safe_open_settings,
-            on_exit=self.quit
+            on_exit=self.quit,
+            on_automation_changed=self.automation.reload
         )
 
-        # 6. Bildirim Motoru
+        # 7. Bildirim Motoru
         self.notifications = NotificationEngine(
             self.config,
             tray_icon_provider=lambda: self.tray.icon
         )
 
-        # 7. Dinleyicilerin Bağlanması
+        # 8. Dinleyicilerin Bağlanması
         self.worker.add_brightness_listener(self._on_worker_brightness)
         self.worker.add_contrast_listener(self._on_worker_contrast)
         self.worker.add_mode_listener(self._on_worker_mode)
@@ -122,6 +129,7 @@ class ViewSonicOmniApp:
 
     def run(self):
         self.worker.start()
+        self.automation.start()
         self.hotkeys.start()
         self.tray.start()
 
@@ -141,6 +149,7 @@ class ViewSonicOmniApp:
     def cleanup(self):
         try:
             self.hotkeys.stop()
+            self.automation.stop()
             self.tray.stop()
             self.worker.stop()
             self.lock.release()
@@ -199,3 +208,4 @@ class ViewSonicOmniApp:
         self.worker.throttle_sec = max(0.05, self.config.throttle_ms / 1000.0)
         self.worker.debounce_sec = max(0.04, self.config.debounce_ms / 1000.0)
         self.worker.watchdog_interval = max(5.0, float(self.config.watchdog_interval_s))
+        self.automation.reload()

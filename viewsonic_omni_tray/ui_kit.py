@@ -50,6 +50,10 @@ class Icons:
     LINK = ""
     PALETTE = ""
     REFRESH = ""
+    CLOSE = ""
+    ADD = ""
+    CLOCK = ""
+    GAME = ""
 
 
 class Theme:
@@ -201,13 +205,15 @@ class Slider(tk.Canvas):
 
     def __init__(self, parent: tk.Misc, theme: Theme, value: int = 0, from_: int = 0, to: int = 100,
                  command: Optional[Callable[[int], None]] = None, bg: str = Palette.BG,
-                 accent: str = Palette.ACCENT, height: Optional[int] = None):
+                 accent: str = Palette.ACCENT, height: Optional[int] = None, origin: Optional[int] = None):
         self.t = theme
         super().__init__(parent, height=height or theme.px(26), bg=bg, highlightthickness=0, bd=0, cursor="hand2")
         self._bg = bg
         self._accent = accent
         self._from = from_
         self._to = to
+        # Dolgu bu değerden başlar (örn. -30..+30 aralığında 0); verilmezse en soldan
+        self._origin = from_ if origin is None else origin
         self._value = int(value)
         self._command = command
         self._hover = False
@@ -295,14 +301,16 @@ class Slider(tk.Canvas):
         x0, x1 = self._geometry()
         cy = h / 2
         track_h = px(4)
-        ratio = (self._value - self._from) / max(1, (self._to - self._from))
-        kx = x0 + (x1 - x0) * ratio
+        span = max(1, (self._to - self._from))
+        kx = x0 + (x1 - x0) * (self._value - self._from) / span
+        ox = x0 + (x1 - x0) * (self._origin - self._from) / span
         accent = Palette.FAINT if self._dimmed else self._accent
 
         d.rounded_rectangle([x0 * S, (cy - track_h / 2) * S, x1 * S, (cy + track_h / 2) * S],
                             radius=track_h / 2 * S, fill=Palette.TRACK)
-        if kx > x0:
-            d.rounded_rectangle([x0 * S, (cy - track_h / 2) * S, kx * S, (cy + track_h / 2) * S],
+        fx0, fx1 = min(ox, kx), max(ox, kx)
+        if fx1 > fx0:
+            d.rounded_rectangle([fx0 * S, (cy - track_h / 2) * S, fx1 * S, (cy + track_h / 2) * S],
                                 radius=track_h / 2 * S, fill=accent)
 
         outer = px(10)
