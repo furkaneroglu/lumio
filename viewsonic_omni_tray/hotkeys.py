@@ -144,22 +144,18 @@ class HotkeyService:
         from .monitor_manager import DISPLAY_MODES
         mode_info = DISPLAY_MODES.get(new_mode, {})
         if self.on_hotkey_triggered:
-            icon = mode_info.get("icon", "📺")
             name = mode_info.get("name", new_mode)
             br = mode_info.get("brightness", 70)
-            cnt = mode_info.get("contrast", 70)
-            self.on_hotkey_triggered(f"{icon} {name} (%{br} P / %{cnt} K)", br, "mode", False)
+            self.on_hotkey_triggered(name, br, "mode", False)
 
     def _on_apply_mode(self, mode_name: str):
         self.worker.apply_display_mode(mode_name)
         from .monitor_manager import DISPLAY_MODES
         mode_info = DISPLAY_MODES.get(mode_name, {})
         if self.on_hotkey_triggered:
-            icon = mode_info.get("icon", "📺")
             name = mode_info.get("name", mode_name)
             br = mode_info.get("brightness", 70)
-            cnt = mode_info.get("contrast", 70)
-            self.on_hotkey_triggered(f"{icon} {name} (%{br} P / %{cnt} K)", br, "mode", False)
+            self.on_hotkey_triggered(name, br, "mode", False)
 
     def _on_apply_profile(self, profile_name: str):
         success = self.worker.apply_profile(profile_name)

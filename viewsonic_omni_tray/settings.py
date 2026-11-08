@@ -1,352 +1,275 @@
 """
 ViewSonic OMNI DDC/CI Tray - Settings Window
-Kullanıcıya özel kısayollar, profiller, bildirimler ve başlangıç ayarlarını yapılandırma ekranı.
+Monitör seçimi, genel seçenekler, profiller ve klavye kısayolları için minimal ayar penceresi.
 """
 
+import threading
 import tkinter as tk
-from tkinter import ttk, messagebox
-from typing import Optional, Callable
+import tkinter.font as tkfont
+from typing import Optional, Callable, Dict, Any
+
 from .config import ConfigManager
 from .queue_worker import AsyncWriteQueueWorker
+from .ui_kit import (
+    Palette, Icons, get_theme, style_window, get_work_area,
+    Segmented, IconButton, Toggle, PillButton, styled_entry,
+)
+
+_HOTKEY_LABELS = [
+    ("brightness_up", "Parlaklık artır"),
+    ("brightness_down", "Parlaklık azalt"),
+    ("contrast_up", "Kontrast artır"),
+    ("contrast_down", "Kontrast azalt"),
+    ("volume_up", "Ses artır"),
+    ("volume_down", "Ses azalt"),
+    ("volume_mute", "Sessiz"),
+    ("cycle_mode", "Ekran modu"),
+    ("cycle_input", "Giriş kaynağı"),
+    ("cycle_monitor", "Ekran değiştir"),
+    ("sleep_monitor", "Uyku modu"),
+    ("profile_day", "Gündüz profili"),
+]
+
 
 class SettingsWindow:
-    """Tüm uygulama tercihlerinin düzenlenebileceği pencereli ayar yöneticisi."""
+    """Tüm uygulama tercihlerinin düzenlendiği ayar penceresi."""
 
-    def __init__(self, root: tk.Tk, config: ConfigManager, worker: AsyncWriteQueueWorker, on_settings_saved: Optional[Callable[[], None]] = None):
+    def __init__(self, root: tk.Tk, config: ConfigManager, worker: AsyncWriteQueueWorker,
+                 on_settings_saved: Optional[Callable[[], None]] = None):
         self.root = root
         self.config = config
         self.worker = worker
         self.on_settings_saved = on_settings_saved
+        self.t = get_theme(root)
         self._window: Optional[tk.Toplevel] = None
+
+        self.profile_entries: Dict[str, tk.Entry] = {}
+        self.hotkey_entries: Dict[str, tk.Entry] = {}
 
     def show(self):
         if self._window is not None and self._window.winfo_exists():
+            self._window.deiconify()
             self._window.lift()
             self._window.focus_force()
             return
-
         self._create_window()
 
+    # --- Yerleşim Yardımcıları ---
+    def _heading(self, parent: tk.Misc, text: str, subtitle: Optional[str] = None) -> tk.Frame:
+        px = self.t.px
+        wrap = tk.Frame(parent, bg=Palette.BG)
+        wrap.pack(fill=tk.X, pady=(px(22), px(4)))
+        left = tk.Frame(wrap, bg=Palette.BG)
+        left.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        tk.Label(left, text=text, font=self.t.font(11, "bold"), fg=Palette.TEXT, bg=Palette.BG,
+                 anchor="w").pack(fill=tk.X)
+        if subtitle:
+            tk.Label(left, text=subtitle, font=self.t.font(8), fg=Palette.MUTED, bg=Palette.BG,
+                     anchor="w").pack(fill=tk.X)
+        right = tk.Frame(wrap, bg=Palette.BG)
+        right.pack(side=tk.RIGHT)
+        return right
+
+    def _divider(self, parent: tk.Misc):
+        tk.Frame(parent, height=1, bg=Palette.BORDER).pack(fill=tk.X)
+
+    def _row(self, parent: tk.Misc, title: str, subtitle: Optional[str] = None) -> tk.Frame:
+        px = self.t.px
+        row = tk.Frame(parent, bg=Palette.BG)
+        row.pack(fill=tk.X, pady=px(10))
+        left = tk.Frame(row, bg=Palette.BG)
+        left.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        tk.Label(left, text=title, font=self.t.font(10), fg=Palette.TEXT, bg=Palette.BG,
+                 anchor="w").pack(fill=tk.X)
+        if subtitle:
+            tk.Label(left, text=subtitle, font=self.t.font(8), fg=Palette.MUTED, bg=Palette.BG,
+                     anchor="w").pack(fill=tk.X)
+        right = tk.Frame(row, bg=Palette.BG)
+        right.pack(side=tk.RIGHT)
+        return right
+
+    def _mono_font(self):
+        families = set(tkfont.families(self.root))
+        for fam in ("Cascadia Mono", "Consolas"):
+            if fam in families:
+                return (fam, 9)
+        return self.t.font(9)
+
+    # --- Pencere ---
     def _create_window(self):
-        self._window = tk.Toplevel(self.root)
-        self._window.title("ViewSonic OMNI - Yapılandırma ve Ayarlar")
-        self._window.geometry("520x640")
-        self._window.minsize(480, 580)
-        self._window.configure(bg="#18181b")
+        t = self.t
+        px = t.px
+        bg = Palette.BG
 
-        sw = self.root.winfo_screenwidth()
-        sh = self.root.winfo_screenheight()
-        x = (sw - 520) // 2
-        y = (sh - 640) // 2
-        self._window.geometry(f"520x640+{x}+{y}")
+        win = tk.Toplevel(self.root)
+        win.withdraw()
+        win.title("Ayarlar - ViewSonic OMNI")
+        win.configure(bg=bg)
+        win.resizable(False, True)
+        win.bind("<Escape>", lambda e: win.destroy())
+        self._window = win
 
-        container = tk.Frame(self._window, bg="#18181b", padx=20, pady=16)
-        container.pack(fill=tk.BOTH, expand=True)
+        width = px(600)
 
-        title_lbl = tk.Label(
-            container,
-            text="⚙️ ViewSonic OMNI DDC/CI Ayarları",
-            font=("Segoe UI", 13, "bold"),
-            fg="#f4f4f5",
-            bg="#18181b"
-        )
-        title_lbl.pack(anchor="w", pady=(0, 12))
+        # Sabit alt çubuk
+        footer = tk.Frame(win, bg=bg, padx=px(28), pady=px(16))
+        footer.pack(side=tk.BOTTOM, fill=tk.X)
+        tk.Frame(win, height=1, bg=Palette.BORDER).pack(side=tk.BOTTOM, fill=tk.X)
+        PillButton(footer, t, "Kaydet", command=self._on_save, primary=True, width=px(110)).pack(side=tk.RIGHT)
+        PillButton(footer, t, "İptal", command=win.destroy, width=px(90)).pack(side=tk.RIGHT, padx=(0, px(8)))
 
-        # --- 1. Bölüm: Hedef Monitör ---
-        sec1 = tk.LabelFrame(
-            container,
-            text=" Hedef Monitör ",
-            font=("Segoe UI", 9, "bold"),
-            fg="#f59e0b",
-            bg="#18181b",
-            padx=12,
-            pady=8
-        )
-        sec1.pack(fill=tk.X, pady=(0, 10))
+        # Kaydırılabilir içerik
+        canvas = tk.Canvas(win, bg=bg, highlightthickness=0, bd=0)
+        canvas.pack(fill=tk.BOTH, expand=True)
+        content = tk.Frame(canvas, bg=bg, padx=px(28), pady=px(6))
+        canvas.create_window((0, 0), window=content, anchor="nw", tags="content")
+        content.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure("content", width=e.width))
 
-        mon_frame = tk.Frame(sec1, bg="#18181b")
-        mon_frame.pack(fill=tk.X)
+        def _on_wheel(event):
+            if content.winfo_reqheight() > canvas.winfo_height():
+                canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+        win.bind("<MouseWheel>", _on_wheel)
 
-        self.monitor_var = tk.StringVar()
-        self._refresh_monitor_list()
+        tk.Label(content, text="Ayarlar", font=t.display_font(18), fg=Palette.TEXT, bg=bg,
+                 anchor="w").pack(fill=tk.X, pady=(px(14), 0))
 
-        self.monitor_combo = ttk.Combobox(
-            mon_frame,
-            textvariable=self.monitor_var,
-            state="readonly",
-            values=self.monitor_options,
-            font=("Segoe UI", 9)
-        )
-        self.monitor_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
-        self._select_active_monitor_option()
+        # 1. Monitör
+        right = self._heading(content, "Monitör", "Panelin ve kısayolların kontrol ettiği ekran")
+        IconButton(right, t, Icons.REFRESH, command=self._on_rescan).pack()
+        self.monitor_holder = tk.Frame(content, bg=bg)
+        self.monitor_holder.pack(fill=tk.X, pady=(px(6), 0))
+        self.monitor_seg = Segmented(self.monitor_holder, t, [])
+        self.monitor_empty_lbl = tk.Label(self.monitor_holder, text="DDC/CI destekli monitör bulunamadı.",
+                                          font=t.font(9), fg=Palette.MUTED, bg=bg, anchor="w")
+        self._refresh_monitor_options()
 
-        rescan_btn = tk.Button(
-            mon_frame,
-            text="Yeniden Tara",
-            font=("Segoe UI", 8),
-            fg="#d4d4d8",
-            bg="#27272a",
-            relief=tk.FLAT,
-            command=self._on_rescan
-        )
-        rescan_btn.pack(side=tk.RIGHT)
+        # 2. Genel
+        self._heading(content, "Genel")
+        self.osd_toggle = Toggle(self._row(content, "Ekran göstergesi",
+                                           "Kısayol kullanıldığında ekranda küçük gösterge çıkar"),
+                                 t, self.config.show_osd, bg=bg)
+        self.osd_toggle.pack()
+        self._divider(content)
+        self.notif_toggle = Toggle(self._row(content, "Bağlantı bildirimleri",
+                                             "Monitör uykuya geçtiğinde veya bağlantı koptuğunda bildir"),
+                                   t, self.config.show_notifications, bg=bg)
+        self.notif_toggle.pack()
+        self._divider(content)
+        self.startup_toggle = Toggle(self._row(content, "Windows ile başlat",
+                                               "Oturum açıldığında sistem tepsisinde çalıştır"),
+                                     t, self.config.run_on_startup, bg=bg)
+        self.startup_toggle.pack()
+        self._divider(content)
+        step_right = self._row(content, "Kısayol adımı", "Her tuş basışında değişecek yüzde")
+        steps = sorted({1, 2, 5, 10, int(self.config.step_size)})
+        self.step_seg = Segmented(step_right, t, [(s, f"%{s}") for s in steps], height=px(30), font_size=8)
+        self.step_seg.configure(width=px(46) * len(steps))
+        self.step_seg.set(int(self.config.step_size))
+        self.step_seg.pack()
 
-        # --- 2. Bölüm: Ön Tanımlı Profiller ---
-        sec2 = tk.LabelFrame(
-            container,
-            text=" Profil Parlaklık Yüzdeleri (%) ",
-            font=("Segoe UI", 9, "bold"),
-            fg="#f59e0b",
-            bg="#18181b",
-            padx=12,
-            pady=8
-        )
-        sec2.pack(fill=tk.X, pady=(0, 10))
-
-        prof_grid = tk.Frame(sec2, bg="#18181b")
-        prof_grid.pack(fill=tk.X)
-
+        # 3. Profiller
+        self._heading(content, "Profiller", "Profil kısayollarıyla uygulanan parlaklık değerleri (%)")
+        grid = tk.Frame(content, bg=bg)
+        grid.pack(fill=tk.X, pady=(px(8), 0))
         self.profile_entries = {}
-        row = 0
-        col = 0
-        for name, default_val in self.config.profiles.items():
-            lbl = tk.Label(prof_grid, text=f"{name}:", font=("Segoe UI", 9), fg="#e4e4e7", bg="#18181b")
-            lbl.grid(row=row, column=col * 2, sticky="w", padx=(0, 6), pady=3)
-
-            entry = tk.Spinbox(
-                prof_grid,
-                from_=0,
-                to=100,
-                width=5,
-                font=("Segoe UI", 9),
-                bg="#27272a",
-                fg="#f4f4f5",
-                buttonbackground="#3f3f46"
-            )
-            entry.delete(0, tk.END)
-            entry.insert(0, str(default_val))
-            entry.grid(row=row, column=col * 2 + 1, sticky="w", padx=(0, 16), pady=3)
+        for i, (name, val) in enumerate(self.config.profiles.items()):
+            r, c = divmod(i, 3)
+            cell = tk.Frame(grid, bg=bg)
+            cell.grid(row=r, column=c, sticky="w", padx=(0, px(18)), pady=px(5))
+            tk.Label(cell, text=name, font=t.font(9), fg=Palette.MUTED, bg=bg, width=8,
+                     anchor="w").pack(side=tk.LEFT)
+            entry = styled_entry(cell, t, width=5, justify="center")
+            entry.insert(0, str(val))
+            entry.pack(side=tk.LEFT)
             self.profile_entries[name] = entry
 
-            col += 1
-            if col > 1:
-                col = 0
-                row += 1
-
-        # --- 3. Bölüm: Klavye Kısayolları (Hotkeys) ---
-        sec3 = tk.LabelFrame(
-            container,
-            text=" Klavye Kısayolları (Global Hotkeys) ",
-            font=("Segoe UI", 9, "bold"),
-            fg="#f59e0b",
-            bg="#18181b",
-            padx=12,
-            pady=8
-        )
-        sec3.pack(fill=tk.X, pady=(0, 10))
-
-        hotkey_frame = tk.Frame(sec3, bg="#18181b")
-        hotkey_frame.pack(fill=tk.X)
-
+        # 4. Klavye kısayolları
+        self._heading(content, "Klavye kısayolları", "Biçim: <ctrl>+<alt>+tuş  ·  boş bırakılırsa devre dışı")
+        hk = tk.Frame(content, bg=bg)
+        hk.pack(fill=tk.X, pady=(px(8), px(18)))
+        hk.columnconfigure(1, weight=1)
+        hk.columnconfigure(3, weight=1)
+        mono = self._mono_font()
         self.hotkey_entries = {}
-        hotkey_labels = [
-            ("brightness_up", "Parlaklık +:"),
-            ("brightness_down", "Parlaklık -:"),
-            ("contrast_up", "Kontrast +:"),
-            ("contrast_down", "Kontrast -:"),
-            ("cycle_mode", "Ekran Modu:"),
-            ("cycle_monitor", "Ekran Değiştir:"),
-            ("volume_up", "Ses +:"),
-            ("volume_down", "Ses -:"),
-            ("volume_mute", "Sessiz (Mute):"),
-            ("cycle_input", "Giriş Kaynağı:"),
-            ("sleep_monitor", "Uyku Modu:"),
-            ("profile_day", "Gündüz Profili:")
-        ]
+        for i, (key_id, label) in enumerate(_HOTKEY_LABELS):
+            r, c = divmod(i, 2)
+            tk.Label(hk, text=label, font=t.font(9), fg=Palette.MUTED, bg=bg,
+                     anchor="w").grid(row=r, column=c * 2, sticky="w", padx=(px(16) if c else 0, px(8)), pady=px(4))
+            entry = styled_entry(hk, t, width=18, font=mono)
+            entry.insert(0, self.config.hotkeys.get(key_id, ""))
+            entry.grid(row=r, column=c * 2 + 1, sticky="ew", pady=px(4))
+            self.hotkey_entries[key_id] = entry
 
-        for i, (key_id, desc) in enumerate(hotkey_labels):
-            r = i // 2
-            c = i % 2
-            tk.Label(
-                hotkey_frame,
-                text=desc,
-                font=("Segoe UI", 8),
-                fg="#a1a1aa",
-                bg="#18181b"
-            ).grid(row=r, column=c * 2, sticky="w", padx=(10 if c > 0 else 0, 4), pady=2)
+        # Boyut ve konum
+        win.update_idletasks()
+        area = get_work_area()
+        if area:
+            left, top, right_edge, bottom = area
+        else:
+            left, top, right_edge, bottom = 0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        wanted_h = content.winfo_reqheight() + footer.winfo_reqheight() + 1
+        height = min(wanted_h, (bottom - top) - px(60))
+        x = left + (right_edge - left - width) // 2
+        y = top + max(0, (bottom - top - height) // 2)
+        win.geometry(f"{width}x{height}+{x}+{y}")
+        win.minsize(width, min(height, px(360)))
 
-            val = self.config.hotkeys.get(key_id, "")
-            e = tk.Entry(
-                hotkey_frame,
-                font=("Segoe UI", 8),
-                bg="#27272a",
-                fg="#f4f4f5",
-                insertbackground="#f59e0b",
-                width=16
-            )
-            e.insert(0, val)
-            e.grid(row=r, column=c * 2 + 1, sticky="ew", padx=(0, 6), pady=2)
-            hotkey_frame.columnconfigure(c * 2 + 1, weight=1)
-            self.hotkey_entries[key_id] = e
+        win.deiconify()
+        style_window(win, rounded=False, dark_titlebar=True)
+        win.lift()
+        win.focus_force()
 
-        step_frame = tk.Frame(sec3, bg="#18181b")
-        step_frame.pack(fill=tk.X, pady=(6, 0))
-
-        tk.Label(
-            step_frame,
-            text="Kısayol Adım Boyutu (%):",
-            font=("Segoe UI", 8),
-            fg="#a1a1aa",
-            bg="#18181b"
-        ).pack(side=tk.LEFT)
-
-        self.step_spin = tk.Spinbox(
-            step_frame,
-            from_=1,
-            to=25,
-            width=5,
-            font=("Segoe UI", 8),
-            bg="#27272a",
-            fg="#f4f4f5"
-        )
-        self.step_spin.delete(0, tk.END)
-        self.step_spin.insert(0, str(self.config.step_size))
-        self.step_spin.pack(side=tk.LEFT, padx=8)
-
-        # --- 4. Bölüm: Seçenekler (OSD, Bildirim & Başlangıç) ---
-        sec4 = tk.Frame(container, bg="#18181b")
-        sec4.pack(fill=tk.X, pady=(0, 14))
-
-        self.osd_check_var = tk.BooleanVar(value=self.config.show_osd)
-        tk.Checkbutton(
-            sec4,
-            text="Kısayol kullanımında ekranda OSD HUD (Parlaklık Çubuğu) göster",
-            variable=self.osd_check_var,
-            font=("Segoe UI", 9),
-            fg="#e4e4e7",
-            bg="#18181b",
-            selectcolor="#27272a",
-            activebackground="#18181b",
-            activeforeground="#f4f4f5"
-        ).pack(anchor="w", pady=2)
-
-        self.notif_check_var = tk.BooleanVar(value=self.config.show_notifications)
-        tk.Checkbutton(
-            sec4,
-            text="Monitör uyku/kopma durumunda Windows balon bildirimleri göster",
-            variable=self.notif_check_var,
-            font=("Segoe UI", 9),
-            fg="#e4e4e7",
-            bg="#18181b",
-            selectcolor="#27272a",
-            activebackground="#18181b",
-            activeforeground="#f4f4f5"
-        ).pack(anchor="w", pady=2)
-
-        self.startup_check_var = tk.BooleanVar(value=self.config.run_on_startup)
-        tk.Checkbutton(
-            sec4,
-            text="Windows açılışında otomatik başlat (Sistem Tepsisinde)",
-            variable=self.startup_check_var,
-            font=("Segoe UI", 9),
-            fg="#e4e4e7",
-            bg="#18181b",
-            selectcolor="#27272a",
-            activebackground="#18181b",
-            activeforeground="#f4f4f5"
-        ).pack(anchor="w", pady=2)
-
-        # --- Butonlar (Kaydet & İptal) ---
-        btn_frame = tk.Frame(container, bg="#18181b")
-        btn_frame.pack(fill=tk.X, side=tk.BOTTOM)
-
-        save_btn = tk.Button(
-            btn_frame,
-            text="Kaydet ve Uygula",
-            font=("Segoe UI", 9, "bold"),
-            fg="#18181b",
-            bg="#f59e0b",
-            activebackground="#d97706",
-            activeforeground="#ffffff",
-            relief=tk.FLAT,
-            bd=0,
-            padx=16,
-            pady=7,
-            command=self._on_save
-        )
-        save_btn.pack(side=tk.RIGHT, padx=(8, 0))
-
-        cancel_btn = tk.Button(
-            btn_frame,
-            text="İptal",
-            font=("Segoe UI", 9),
-            fg="#a1a1aa",
-            bg="#27272a",
-            activebackground="#3f3f46",
-            activeforeground="#ffffff",
-            relief=tk.FLAT,
-            bd=0,
-            padx=14,
-            pady=7,
-            command=self._window.destroy
-        )
-        cancel_btn.pack(side=tk.RIGHT)
-
-    def _refresh_monitor_list(self):
-        self.monitor_options = []
-        for dev in self.worker.devices:
-            self.monitor_options.append(f"[{dev.index}] {dev.description}")
-        if len(self.worker.devices) > 1:
-            self.monitor_options.append("[-1] 🔗 Tüm Ekranlar (Senkron Kontrol)")
-        if not self.monitor_options:
-            self.monitor_options.append("Monitör bulunamadı")
-
-    def _select_active_monitor_option(self):
-        """Combobox'ta şu an aktif olan monitörü seçili getirir."""
-        if not self.monitor_options:
+    # --- Monitör Listesi ---
+    def _refresh_monitor_options(self):
+        if self._window is None or not self._window.winfo_exists():
             return
-        cur_idx = self.worker.active_index
-        found_idx = 0
-        for i, opt in enumerate(self.monitor_options):
-            if opt.startswith(f"[{cur_idx}]"):
-                found_idx = i
-                break
-        self.monitor_combo.current(found_idx)
+        devs = list(self.worker.devices)
+        if devs:
+            options = [(d.index, d.short_name) for d in devs]
+            if len(devs) > 1:
+                options.append((-1, "Tümü"))
+            self.monitor_seg.set_options(options)
+            keys = [k for k, _ in options]
+            self.monitor_seg.set(self.worker.active_index if self.worker.active_index in keys else keys[0])
+            self.monitor_empty_lbl.pack_forget()
+            self.monitor_seg.pack(fill=tk.X)
+        else:
+            self.monitor_seg.pack_forget()
+            self.monitor_empty_lbl.pack(fill=tk.X)
 
     def _on_rescan(self):
-        self.worker.rescan_monitors()
-        self._refresh_monitor_list()
-        self.monitor_combo["values"] = self.monitor_options
-        self._select_active_monitor_option()
-        messagebox.showinfo("Tarama", "Monitör listesi güncellendi.", parent=self._window)
-
-    def _on_save(self):
-        selected = self.monitor_var.get()
-        if selected and selected.startswith("["):
+        def _work():
+            self.worker.rescan_monitors()
             try:
-                idx = int(selected.split("]")[0][1:])
-                self.worker.select_device(idx)
+                self.root.after(0, self._refresh_monitor_options)
             except Exception:
                 pass
 
+        threading.Thread(target=_work, daemon=True, name="Settings-Rescan").start()
+
+    # --- Kaydet ---
+    def _on_save(self):
+        selected: Any = self.monitor_seg.get() if self.worker.devices else None
+        if selected is not None and selected != self.worker.active_index:
+            self.worker.select_device(selected)
+
         for name, entry in self.profile_entries.items():
             try:
-                v = int(entry.get())
-                self.config.profiles[name] = max(0, min(100, v))
+                self.config.profiles[name] = max(0, min(100, int(entry.get())))
             except ValueError:
                 pass
 
         for key_id, entry in self.hotkey_entries.items():
             self.config.hotkeys[key_id] = entry.get().strip()
 
-        try:
-            self.config.step_size = int(self.step_spin.get())
-        except ValueError:
-            pass
+        step = self.step_seg.get()
+        if step is not None:
+            self.config.step_size = int(step)
 
-        self.config.show_osd = self.osd_check_var.get()
-        self.config.show_notifications = self.notif_check_var.get()
-        self.config.run_on_startup = self.startup_check_var.get()
+        self.config.show_osd = self.osd_toggle.get()
+        self.config.show_notifications = self.notif_toggle.get()
+        self.config.run_on_startup = self.startup_toggle.get()
 
         self.config.save()
 

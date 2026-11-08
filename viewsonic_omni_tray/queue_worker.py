@@ -481,6 +481,11 @@ class AsyncWriteQueueWorker:
             new_val = self._target_volume + delta
         self.set_volume(new_val, immediate_ui=True)
 
+    @property
+    def is_muted(self) -> bool:
+        with self._lock:
+            return self._is_muted
+
     def toggle_mute(self) -> bool:
         with self._lock:
             self._is_muted = not self._is_muted
