@@ -78,14 +78,7 @@ class SettingsWindow:
             font=("Segoe UI", 9)
         )
         self.monitor_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
-        if self.monitor_options:
-            cur_idx = self.worker.active_index
-            found_idx = 0
-            for i, opt in enumerate(self.monitor_options):
-                if opt.startswith(f"[{cur_idx}]"):
-                    found_idx = i
-                    break
-            self.monitor_combo.current(found_idx)
+        self._select_active_monitor_option()
 
         rescan_btn = tk.Button(
             mon_frame,
@@ -308,12 +301,23 @@ class SettingsWindow:
         if not self.monitor_options:
             self.monitor_options.append("Monitör bulunamadı")
 
+    def _select_active_monitor_option(self):
+        """Combobox'ta şu an aktif olan monitörü seçili getirir."""
+        if not self.monitor_options:
+            return
+        cur_idx = self.worker.active_index
+        found_idx = 0
+        for i, opt in enumerate(self.monitor_options):
+            if opt.startswith(f"[{cur_idx}]"):
+                found_idx = i
+                break
+        self.monitor_combo.current(found_idx)
+
     def _on_rescan(self):
         self.worker.rescan_monitors()
         self._refresh_monitor_list()
         self.monitor_combo["values"] = self.monitor_options
-        if self.monitor_options:
-            self.monitor_combo.current(0)
+        self._select_active_monitor_option()
         messagebox.showinfo("Tarama", "Monitör listesi güncellendi.", parent=self._window)
 
     def _on_save(self):

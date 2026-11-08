@@ -282,7 +282,7 @@ class MonitorManager:
         # Low-level VCP (Ses 0x62, Giriş 0x60, Güç 0xD6)
         self.dxva2.GetVCPFeatureAndVCPFeatureReply.argtypes = [
             wintypes.HANDLE,
-            ctypes.c_byte,
+            wintypes.BYTE,
             ctypes.POINTER(wintypes.DWORD),
             ctypes.POINTER(wintypes.DWORD),
             ctypes.POINTER(wintypes.DWORD)
@@ -291,7 +291,7 @@ class MonitorManager:
 
         self.dxva2.SetVCPFeature.argtypes = [
             wintypes.HANDLE,
-            ctypes.c_byte,
+            wintypes.BYTE,
             wintypes.DWORD
         ]
         self.dxva2.SetVCPFeature.restype = wintypes.BOOL
@@ -329,6 +329,17 @@ class MonitorManager:
             wintypes.LPARAM
         ]
         self.user32.EnumDisplayMonitors.restype = wintypes.BOOL
+
+        # 64-bit handle'ların int'e kırpılmaması için imzalar açıkça tanımlanır
+        self.user32.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.c_void_p]
+        self.user32.GetMonitorInfoW.restype = wintypes.BOOL
+        self.user32.EnumDisplayDevicesW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            wintypes.DWORD
+        ]
+        self.user32.EnumDisplayDevicesW.restype = wintypes.BOOL
 
     def _format_win32_error(self, err_code: int) -> str:
         unsigned = err_code & 0xFFFFFFFF
@@ -549,7 +560,9 @@ class MonitorManager:
                                 model=model
                             )
                             devices.append(dev)
-                            global_idx += 1
+                        # İndeks, DDC/CI desteklemeyen monitörler için de artırılmalıdır;
+                        # aksi halde _execute_on_handle() farklı (yanlış) bir monitörü hedefler.
+                        global_idx += 1
                 finally:
                     self.dxva2.DestroyPhysicalMonitors(count.value, phys_array)
 
@@ -563,9 +576,9 @@ class MonitorManager:
             if not self.dxva2.SetMonitorBrightness(handle, wintypes.DWORD(value)):
                 err = ctypes.GetLastError()
                 raise DDCCIError(f"Parlaklık ayarlanamadı: {self._format_win32_error(err)}", code=err)
-            min_b, cur_b, max_b = wintypes.DWORD(), wintypes.DWORD(), wintypes.DWORD()
-            self.dxva2.GetMonitorBrightness(handle, ctypes.byref(min_b), ctypes.byref(cur_b), ctypes.byref(max_b))
-            return cur_b.value
+            # Not: DDC/CI, Set komutundan sonra ~50 ms bekleme gerektirir; anında geri okuma
+            # çoğu monitörde eski değeri döndürür. Başarılı yazılan değer döndürülür.
+            return value
 
         return self._execute_on_handle(target_index, _action)
 
@@ -587,9 +600,9 @@ class MonitorManager:
             if not self.dxva2.SetVCPFeature(handle, 0x62, wintypes.DWORD(value)):
                 err = ctypes.GetLastError()
                 raise DDCCIError(f"Ses ayarlanamadı: {self._format_win32_error(err)}", code=err)
-            pvct, cur_vol, mx = wintypes.DWORD(), wintypes.DWORD(), wintypes.DWORD()
-            self.dxva2.GetVCPFeatureAndVCPFeatureReply(handle, 0x62, ctypes.byref(pvct), ctypes.byref(cur_vol), ctypes.byref(mx))
-            return cur_vol.value
+            # Not: DDC/CI, Set komutundan sonra ~50 ms bekleme gerektirir; anında geri okuma
+            # çoğu monitörde eski değeri döndürür. Başarılı yazılan değer döndürülür.
+            return value
 
         return self._execute_on_handle(target_index, _action)
 
@@ -654,9 +667,9 @@ class MonitorManager:
             if not self.dxva2.SetVCPFeature(handle, 0x12, wintypes.DWORD(value)):
                 err = ctypes.GetLastError()
                 raise DDCCIError(f"Kontrast ayarlanamadı: {self._format_win32_error(err)}", code=err)
-            pvct, cur_cnt, mx = wintypes.DWORD(), wintypes.DWORD(), wintypes.DWORD()
-            self.dxva2.GetVCPFeatureAndVCPFeatureReply(handle, 0x12, ctypes.byref(pvct), ctypes.byref(cur_cnt), ctypes.byref(mx))
-            return cur_cnt.value
+            # Not: DDC/CI, Set komutundan sonra ~50 ms bekleme gerektirir; anında geri okuma
+            # çoğu monitörde eski değeri döndürür. Başarılı yazılan değer döndürülür.
+            return value
 
         return self._execute_on_handle(target_index, _action)
 

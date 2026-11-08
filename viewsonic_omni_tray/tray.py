@@ -86,8 +86,36 @@ class TrayApp:
             title="ViewSonic OMNI DDC/CI",
             menu=pystray.Menu(lambda: self._build_menu_items())
         )
-        self.icon.default_action = lambda icon, item: self.on_open_popup()
+        self._install_menu_refresh_hook()
         self.icon.run_detached()
+
+    def _install_menu_refresh_hook(self):
+        """
+        pystray'in Win32 arka ucu menüyü yalnızca update_menu() çağrıldığında yeniden oluşturur;
+        callable menü öğeleri kendiliğinden yenilenmez. Sağ tıkta, menü gösterilmeden hemen önce
+        (pystray'in kendi thread'inde) menüyü yeniden oluşturarak güncel durumun görünmesini sağlar.
+        """
+        icon = self.icon
+        handlers = getattr(icon, "_message_handlers", None)
+        if not isinstance(handlers, dict):
+            return
+        try:
+            from pystray._util import win32 as pywin32
+        except Exception:
+            return
+        original = handlers.get(pywin32.WM_NOTIFY)
+        if original is None:
+            return
+
+        def _on_notify(wparam, lparam):
+            if lparam == pywin32.WM_RBUTTONUP:
+                try:
+                    icon.update_menu()
+                except Exception as e:
+                    print(f"[!] Tray menu refresh error: {e}")
+            return original(wparam, lparam)
+
+        handlers[pywin32.WM_NOTIFY] = _on_notify
 
     def stop(self):
         if self.icon is not None:
@@ -108,11 +136,19 @@ class TrayApp:
         inp_name = INPUT_SOURCES.get(self.worker.get_current_input(), "HDMI")
         title_text = f"Ekran Kontrol ({desc})\nMod: {mode} | P: %{brightness} | K: %{cnt} | S: %{vol} | Giriş: {inp_name} [{status_str}]"
 
+        # Windows NOTIFYICONDATA.szTip en fazla 128 WCHAR (NUL dahil) alır;
+        # daha uzun metin pystray'de ValueError fırlatır ve simge güncellemesi de atlanırdı.
+        if len(title_text) > 127:
+            title_text = title_text[:126] + "…"
+
         try:
-            self.icon.title = title_text
             self.icon.icon = create_tray_image(brightness, status)
         except Exception as e:
-            print(f"[!] Tray update error: {e}")
+            print(f"[!] Tray icon update error: {e}")
+        try:
+            self.icon.title = title_text
+        except Exception as e:
+            print(f"[!] Tray title update error: {e}")
 
     def _build_menu(self) -> pystray.Menu:
         return pystray.Menu(lambda: self._build_menu_items())

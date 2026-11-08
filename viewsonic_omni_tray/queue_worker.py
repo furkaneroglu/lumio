@@ -31,6 +31,8 @@ class AsyncWriteQueueWorker:
         self.devices: List[MonitorDevice] = []
         self.active_device: Optional[MonitorDevice] = None
         self.active_index: int = 0
+        # Kullanıcı henüz bir monitör seçmediyse ilk taramada config.monitor_match kullanılır
+        self._user_selected: bool = False
 
         self.status: MonitorStatus = MonitorStatus.DISCONNECTED
         self.status_message: str = "Başlatılıyor..."
@@ -216,10 +218,11 @@ class AsyncWriteQueueWorker:
                     self.status_message = "Tüm Ekranlar (Senkron Kontrol) bağlandı."
                 else:
                     target = None
-                    for d in devs:
-                        if d.index == self.active_index:
-                            target = d
-                            break
+                    if self._user_selected:
+                        for d in devs:
+                            if d.index == self.active_index:
+                                target = d
+                                break
 
                     if not target:
                         match_keyword = self.config.monitor_match.lower()
@@ -233,6 +236,7 @@ class AsyncWriteQueueWorker:
 
                     self.active_device = target
                     self.active_index = target.index
+                    self._user_selected = True
                     self.status_message = f"{target.description} bağlandı."
 
                 self._current_brightness = target.current_brightness
@@ -275,6 +279,7 @@ class AsyncWriteQueueWorker:
         selected_desc = ""
         with self._lock:
             if index == -1:
+                self._user_selected = True
                 self.active_index = -1
                 self.active_device = None
                 if self.devices:
@@ -295,6 +300,7 @@ class AsyncWriteQueueWorker:
             else:
                 for d in self.devices:
                     if d.index == index:
+                        self._user_selected = True
                         self.active_device = d
                         self.active_index = index
                         self._current_brightness = d.current_brightness
@@ -348,9 +354,11 @@ class AsyncWriteQueueWorker:
         clamped = max(0, min(100, int(value)))
         with self._lock:
             self._target_brightness = clamped
-            if immediate_ui:
-                self._notify_brightness(clamped, from_hardware=False)
             self._request_event.set()
+        # Dinleyiciler kilit DIŞINDA çağrılmalı: root.after() başka thread'den çağrıldığında
+        # Tk ana thread'ini bekler; ana thread de kilidi bekliyorsa kilitlenme (donma) oluşur.
+        if immediate_ui:
+            self._notify_brightness(clamped, from_hardware=False)
 
     def change_brightness_by(self, delta: int):
         with self._lock:
@@ -385,6 +393,7 @@ class AsyncWriteQueueWorker:
             target_b = mode_data["brightness"]
             target_c = mode_data["contrast"]
             target_cp = mode_data["color_preset"]
+            target_dev = self.active_device
 
             self._target_brightness = target_b
             self._current_brightness = target_b
@@ -409,10 +418,10 @@ class AsyncWriteQueueWorker:
                             print(f"[!] Display mode error on #{d.index}: {de}")
                 else:
                     self.manager.apply_display_mode(target_idx, mode_name)
-                    if self.active_device:
-                        self.active_device.current_mode = mode_name
-                        self.active_device.current_brightness = target_b
-                        self.active_device.current_contrast = target_c
+                    if target_dev:
+                        target_dev.current_mode = mode_name
+                        target_dev.current_brightness = target_b
+                        target_dev.current_contrast = target_c
             except Exception as e:
                 print(f"[!] Ekran modu uygulama hatası: {e}")
 
@@ -441,9 +450,11 @@ class AsyncWriteQueueWorker:
         clamped = max(0, min(100, int(value)))
         with self._lock:
             self._target_contrast = clamped
-            if immediate_ui:
-                self._notify_contrast(clamped, from_hardware=False)
             self._request_event.set()
+        # Dinleyiciler kilit DIŞINDA çağrılmalı: root.after() başka thread'den çağrıldığında
+        # Tk ana thread'ini bekler; ana thread de kilidi bekliyorsa kilitlenme (donma) oluşur.
+        if immediate_ui:
+            self._notify_contrast(clamped, from_hardware=False)
 
     def change_contrast_by(self, delta: int):
         with self._lock:
@@ -459,9 +470,11 @@ class AsyncWriteQueueWorker:
         clamped = max(0, min(100, int(value)))
         with self._lock:
             self._target_volume = clamped
-            if immediate_ui:
-                self._notify_volume(clamped, self._is_muted)
             self._request_event.set()
+        # Dinleyiciler kilit DIŞINDA çağrılmalı: root.after() başka thread'den çağrıldığında
+        # Tk ana thread'ini bekler; ana thread de kilidi bekliyorsa kilitlenme (donma) oluşur.
+        if immediate_ui:
+            self._notify_volume(clamped, self._is_muted)
 
     def change_volume_by(self, delta: int):
         with self._lock:
@@ -501,6 +514,7 @@ class AsyncWriteQueueWorker:
         """Giriş kaynağını (DisplayPort 0x0F, HDMI 1 0x11, HDMI 2 0x12) ayarlar."""
         with self._lock:
             target_idx = self.active_index
+            target_dev = self.active_device
             self._current_input = source_code
         input_name = INPUT_SOURCES.get(source_code, f"0x{source_code:02X}")
         self._notify_input(source_code, input_name)
@@ -516,8 +530,8 @@ class AsyncWriteQueueWorker:
                             print(f"[!] Giriş değiştirme hatası #{d.index}: {de}")
                 else:
                     self.manager.set_input_source(target_idx, source_code)
-                    if self.active_device:
-                        self.active_device.current_input = source_code
+                    if target_dev:
+                        target_dev.current_input = source_code
             except Exception as e:
                 print(f"[!] Giriş değiştirme hatası: {e}")
 
@@ -660,39 +674,45 @@ class AsyncWriteQueueWorker:
                         self._notify_volume(target_v, self._is_muted)
                 else:
                     # Tekil Monitör Modu
+                    with self._lock:
+                        dev = self.active_device
                     if need_b:
-                        verified_b = self.manager.set_brightness(target_dev_idx, target_b)
+                        self.manager.set_brightness(target_dev_idx, target_b)
                         with self._lock:
-                            self._current_brightness = verified_b
-                            if self.active_device:
-                                self.active_device.current_brightness = verified_b
-                        self._notify_brightness(verified_b, from_hardware=True)
+                            self._current_brightness = target_b
+                            if dev:
+                                dev.current_brightness = target_b
+                        self._notify_brightness(target_b, from_hardware=True)
 
                     if need_c:
-                        verified_c = self.manager.set_contrast(target_dev_idx, target_c)
+                        self.manager.set_contrast(target_dev_idx, target_c)
                         with self._lock:
-                            self._current_contrast = verified_c
-                            if self.active_device:
-                                self.active_device.current_contrast = verified_c
-                        self._notify_contrast(verified_c, from_hardware=True)
+                            self._current_contrast = target_c
+                            if dev:
+                                dev.current_contrast = target_c
+                        self._notify_contrast(target_c, from_hardware=True)
 
                     if need_v:
-                        verified_v = self.manager.set_volume(target_dev_idx, target_v)
+                        self.manager.set_volume(target_dev_idx, target_v)
                         with self._lock:
-                            self._current_volume = verified_v
-                            if self.active_device:
-                                self.active_device.current_volume = verified_v
-                        self._notify_volume(verified_v, self._is_muted)
+                            self._current_volume = target_v
+                            if dev:
+                                dev.current_volume = target_v
+                        self._notify_volume(target_v, self._is_muted)
 
                 self._last_write_timestamp = time.time()
 
+                reconnected = False
                 with self._lock:
                     if self.status != MonitorStatus.CONNECTED:
                         self.status = MonitorStatus.CONNECTED
                         self.status_message = "Bağlantı aktif."
-                        self._notify_status(self.status, self.status_message)
+                        reconnected = True
+                if reconnected:
+                    self._notify_status(MonitorStatus.CONNECTED, "Bağlantı aktif.")
 
             except DDCCIDisconnectedError:
+                self._drop_pending_writes(target_b, target_c, target_v)
                 with self._lock:
                     self.status = MonitorStatus.SLEEPING
                     self.status_message = "Monitör uyku modunda veya bağlantı kesildi."
@@ -700,6 +720,7 @@ class AsyncWriteQueueWorker:
                 time.sleep(0.5)
 
             except DDCCIError as e:
+                self._drop_pending_writes(target_b, target_c, target_v)
                 with self._lock:
                     self.status = MonitorStatus.ERROR
                     self.status_message = f"DDC/CI Hatası: {e}"
@@ -707,6 +728,7 @@ class AsyncWriteQueueWorker:
                 time.sleep(0.5)
 
             except Exception as e:
+                self._drop_pending_writes(target_b, target_c, target_v)
                 with self._lock:
                     self.status = MonitorStatus.ERROR
                     self.status_message = f"Bilinmeyen hata: {e}"
@@ -720,11 +742,25 @@ class AsyncWriteQueueWorker:
                         self._target_volume == self._current_volume):
                         self._request_event.clear()
 
+    def _drop_pending_writes(self, target_b: int, target_c: int, target_v: int):
+        """
+        Başarısız yazma isteğini terk eder. Aksi halde hedef != mevcut kaldığı için döngü
+        aynı (desteklenmeyen / ulaşılamayan) komutu her 0.5 sn'de sonsuza dek tekrar dener.
+        Watchdog yeniden taramada gerçek donanım değerlerini geri yükler.
+        Kullanıcı bu arada yeni bir değer istediyse o istek korunur.
+        """
+        with self._lock:
+            if self._target_brightness == target_b:
+                self._current_brightness = target_b
+            if self._target_contrast == target_c:
+                self._current_contrast = target_c
+            if self._target_volume == target_v:
+                self._current_volume = target_v
+
     # --- Watchdog & Yeniden Bağlantı Döngüsü ---
     def _watchdog_loop(self):
         while not self._stop_event.is_set():
-            time.sleep(self.watchdog_interval)
-            if self._stop_event.is_set():
+            if self._stop_event.wait(self.watchdog_interval):
                 break
 
             if self.status in (MonitorStatus.SLEEPING, MonitorStatus.DISCONNECTED, MonitorStatus.ERROR):

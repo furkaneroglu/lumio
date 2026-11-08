@@ -6,6 +6,7 @@ Kullanıcı tercihlerini JSON formatında saklar ve Windows başlangıç kaydın
 import os
 import sys
 import json
+import copy
 import winreg
 from typing import Dict, Any
 
@@ -87,14 +88,14 @@ class ConfigManager:
                 self.data = self._merge_defaults(loaded, DEFAULT_CONFIG)
             except Exception as e:
                 print(f"[!] Ayar dosyası okunamadı, varsayılanlar yükleniyor: {e}")
-                self.data = dict(DEFAULT_CONFIG)
+                self.data = copy.deepcopy(DEFAULT_CONFIG)
                 self.save()
         else:
-            self.data = dict(DEFAULT_CONFIG)
+            self.data = copy.deepcopy(DEFAULT_CONFIG)
             self.save()
 
     def _merge_defaults(self, loaded: Dict[str, Any], defaults: Dict[str, Any]) -> Dict[str, Any]:
-        result = dict(defaults)
+        result = copy.deepcopy(defaults)
         for k, v in loaded.items():
             if isinstance(v, dict) and k in result and isinstance(result[k], dict):
                 result[k] = self._merge_defaults(v, result[k])

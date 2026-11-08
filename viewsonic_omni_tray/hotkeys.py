@@ -109,6 +109,17 @@ class HotkeyService:
             if hotkeys.get("sleep_monitor"):
                 hotkey_mapping[hotkeys["sleep_monitor"]] = lambda: self._on_sleep_monitor()
 
+            # Tek bir geçersiz kısayol (örn. ayarlarda yanlış yazılmış) tüm dinleyicinin
+            # çökmesine yol açmasın: her birini ayrı doğrula, hatalıları atla.
+            valid_mapping = {}
+            for combo, callback in hotkey_mapping.items():
+                try:
+                    keyboard.HotKey.parse(combo)
+                    valid_mapping[combo] = callback
+                except Exception as e:
+                    print(f"[!] Geçersiz kısayol atlandı '{combo}': {e}")
+            hotkey_mapping = valid_mapping
+
             try:
                 self._listener = keyboard.GlobalHotKeys(hotkey_mapping)
                 self._listener.daemon = True
